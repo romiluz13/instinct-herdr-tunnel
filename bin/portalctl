@@ -1,0 +1,173 @@
+#!/usr/bin/env node
+'use strict';
+const { execFileSync, spawnSync, spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const http = require('http');
+const net = require('net');
+const { config, ensureDirs } = require('../lib/config');
+const { createToken } = require('../lib/security');
+
+const ROOT = path.join(__dirname, '..');
+const UID = process.getuid();
+const DOMAIN = `gui/${UID}`;
+const PREFIX = process.env.HERDR_PORTAL_LAUNCHD_PREFIX || 'dev.herdr-portal'; // launchd label of the portal; the tunnel adds ".tunnel"
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(PREFIX)) { console.error('error: HERDR_PORTAL_LAUNCHD_PREFIX may contain only letters, digits, ".", "_" and "-"'); process.exit(2); }
+const LABELS = { portal: PREFIX, tunnel: PREFIX + '.tunnel' };
+const plistPath = (k) => path.join(os.homedir(), 'Library', 'LaunchAgents', LABELS[k] + '.plist');
+const which = (b) => { try { return execFileSync('/usr/bin/which', [b], { encoding: 'utf8' }).trim(); } catch { return null; } };
+const LAUNCHCTL = process.env.HERDR_PORTAL_LAUNCHCTL || '/bin/launchctl'; // the override exists so tests can run `install` against a fake launchctl
+const lc = (...a) => spawnSync(LAUNCHCTL, a, { encoding: 'utf8' });
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+// launchd gives services this minimal PATH; the plist records it and the install preflight runs herdr under it.
+const SERVICE_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
+const PASS_THROUGH = ['HERDR_PORTAL_STATE_DIR', 'HERDR_PORTAL_LOG_DIR', 'HERDR_PORTAL_HOSTS', 'HERDR_PORTAL_TUNNEL_METRICS', 'CLOUDFLARED_BIN'];
+
+function plist(kind) {
+  const logBase = path.join(config.logDir, kind === 'portal' ? 'portal' : 'tunnel');
+  const nodeBin = process.execPath;
+  const script = kind === 'portal' ? path.join(ROOT, 'server.js') : path.join(ROOT, 'bin', 'tunnel-runner.js');
+  const env = { PATH: SERVICE_PATH, HOME: os.homedir(), HERDR_BIN: herdrBin(), HERDR_PORTAL_PORT: String(config.port) };
+  // A service that ignored a non-default location chosen at install time would read another token and ledger than portalctl does.
+  for (const k of PASS_THROUGH) if (process.env[k]) env[k] = process.env[k];
+  // The opt-in reaches the service only when the installer set it to exactly "1", and only the portal reads it.
+  if (kind === 'portal' && process.env.HERDR_PORTAL_ENABLE_AGENT_DECISION === '1') env.HERDR_PORTAL_ENABLE_AGENT_DECISION = '1';
+  const envXml = Object.entries(env).map(([k, v]) => `    <key>${k}</key><string>${esc(v)}</string>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${LABELS[kind]}</string>
+  <key>ProgramArguments</key><array><string>${esc(nodeBin)}</string><string>${esc(script)}</string></array>
+  <key>WorkingDirectory</key><string>${esc(ROOT)}</string>
+  <key>EnvironmentVariables</key><dict>
+${envXml}
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>${esc(logBase)}.log</string>
+  <key>StandardErrorPath</key><string>${esc(logBase)}.err.log</string>
+</dict></plist>
+`;
+}
+
+// launchd gives services a minimal PATH, so the plist records an absolute path. If `herdr` is a version-manager shim, set HERDR_BIN to the real binary.
+function herdrBin() { return process.env.HERDR_BIN || which('herdr') || config.herdrBin; }
+
+const portFree = (port) => new Promise((resolve) => {
+  const probe = net.createServer(); probe.once('error', () => resolve(false));
+  probe.listen(port, config.host, () => probe.close(() => resolve(true)));
+});
+const isExecutable = (f) => { try { fs.accessSync(f, fs.constants.X_OK); return fs.statSync(f).isFile(); } catch { return false; } };
+
+// Everything `install` depends on is checked BEFORE it writes a token, directory, plist or launchd job.
+async function preflight() {
+  const problems = [];
+  const hb = herdrBin();
+  if (!path.isAbsolute(hb)) problems.push(`herdr resolved to "${hb}", which is not an absolute path, and launchd starts services with a minimal PATH. Install Herdr or set HERDR_BIN to its real binary (not a version-manager shim).`);
+  else if (!isExecutable(hb)) problems.push(`herdr at ${hb} is not an executable file. Set HERDR_BIN to the real binary.`);
+  else {
+    const v = spawnSync(hb, ['--version'], { env: { PATH: SERVICE_PATH, HOME: os.homedir() }, encoding: 'utf8', timeout: 5000 });
+    if (v.status !== 0) problems.push(`${hb} --version failed under launchd's minimal environment (exit ${v.status === null ? 'timeout/signal' : v.status}). If it is a version-manager shim, set HERDR_BIN to the real binary.`);
+  }
+  // A job that is already loaded under this label legitimately holds the port during a reinstall.
+  if (!loaded('portal') && !(await portFree(config.port))) problems.push(`${config.host}:${config.port} is already in use. Another portal (for example one installed under a different launchd label) may share this port, token and ledger. Choose a fresh instance: set HERDR_PORTAL_PORT, HERDR_PORTAL_STATE_DIR and HERDR_PORTAL_LOG_DIR. Migrating an existing instance is a separate step you do yourself; install never renames, copies or rotates existing state.`);
+  const cf = process.env.CLOUDFLARED_BIN || which('cloudflared');
+  return { problems, tunnel: !!cf && path.isAbsolute(cf) && isExecutable(cf) };
+}
+
+const loaded = (k) => lc('print', `${DOMAIN}/${LABELS[k]}`).status === 0;
+const kinds = (arg) => (arg === 'portal' || arg === 'tunnel' ? [arg] : ['portal', 'tunnel']);
+
+function start(k) {
+  if (!fs.existsSync(plistPath(k))) throw new Error('not installed; run: portalctl install');
+  if (loaded(k)) { lc('kickstart', `${DOMAIN}/${LABELS[k]}`); return 'already loaded; kickstarted'; }
+  lc('enable', `${DOMAIN}/${LABELS[k]}`);
+  const r = lc('bootstrap', DOMAIN, plistPath(k));
+  if (r.status !== 0) throw new Error(`bootstrap ${k} failed: ${r.stderr.trim()}`);
+  return 'started';
+}
+const stop = (k) => { if (!loaded(k)) return 'not loaded'; const r = lc('bootout', `${DOMAIN}/${LABELS[k]}`); if (r.status !== 0) throw new Error(`bootout ${k}: ${r.stderr.trim()}`); return 'stopped'; };
+const restart = (k) => { if (!loaded(k)) return start(k); const r = lc('kickstart', '-k', `${DOMAIN}/${LABELS[k]}`); if (r.status !== 0) throw new Error(`kickstart ${k}: ${r.stderr.trim()}`); return 'restarted'; };
+
+function get(p, headers = {}) {
+  return new Promise((resolve) => {
+    const r = http.get({ host: config.host, port: config.port, path: p, headers, timeout: 3000 }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch { /* */ } resolve({ status: res.statusCode, json: j }); }); });
+    r.on('error', (e) => resolve({ status: 0, error: e.code })); r.on('timeout', () => { r.destroy(); resolve({ status: 0, error: 'timeout' }); });
+  });
+}
+const token = () => fs.readFileSync(config.tokenFile, 'utf8').trim();
+
+function copyToken() {
+  const t = token();
+  const pb = spawnSync('/usr/bin/pbcopy', { input: t });
+  if (pb.status !== 0) throw new Error('pbcopy failed');
+  const digest = crypto.createHash('sha256').update(t).digest('hex');
+  // clear the clipboard after 60s, only if it still holds the token
+  const code = `setTimeout(()=>{const{execFileSync,spawnSync}=require('child_process');const c=require('crypto');try{const cur=execFileSync('/usr/bin/pbpaste',{encoding:'utf8'}).trim();if(c.createHash('sha256').update(cur).digest('hex')==='${digest}')spawnSync('/usr/bin/pbcopy',{input:''});}catch{}},60000)`;
+  spawn(process.execPath, ['-e', code], { detached: true, stdio: 'ignore' }).unref();
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const cmds = {
+  async plist(a) { if (!LABELS[a]) { console.error('usage: portalctl plist <portal|tunnel>'); process.exit(2); } process.stdout.write(plist(a)); },
+  async install() {
+    const pre = await preflight();
+    if (pre.problems.length) { for (const m of pre.problems) console.error('preflight: ' + m); console.error('nothing was written and no service was started'); process.exit(1); }
+    const kindsToInstall = pre.tunnel ? ['portal', 'tunnel'] : ['portal'];
+    if (!pre.tunnel) console.log('cloudflared not found (set CLOUDFLARED_BIN to an absolute path to use a tunnel): installing the portal only');
+    ensureDirs();
+    if (!fs.existsSync(config.tokenFile)) { const n = createToken(); console.log(`token created (${n} chars, mode 0600) at ${config.tokenFile}`); }
+    fs.mkdirSync(path.dirname(plistPath('portal')), { recursive: true });
+    for (const k of kindsToInstall) { fs.writeFileSync(plistPath(k), plist(k), { mode: 0o644 }); console.log(`wrote ${plistPath(k)}`); }
+    for (const k of kindsToInstall) console.log(k, start(k));
+  },
+  async start(a) { for (const k of kinds(a)) console.log(k, start(k)); },
+  async stop(a) { for (const k of kinds(a)) console.log(k, stop(k)); },
+  async restart(a) { for (const k of kinds(a)) console.log(k, restart(k)); },
+  async status() {
+    for (const k of ['portal', 'tunnel']) {
+      const r = lc('print', `${DOMAIN}/${LABELS[k]}`);
+      const pid = /\bpid = (\d+)/.exec(r.stdout || '')?.[1];
+      const state = /\bstate = (\w[\w ]*)/.exec(r.stdout || '')?.[1];
+      console.log(`${k.padEnd(7)} launchd: ${r.status === 0 ? `loaded, state=${state}, pid=${pid || '-'}` : 'not loaded'}`);
+    }
+    const hz = await get('/healthz');
+    console.log(`portal  http://${config.host}:${config.port}/healthz -> ${hz.status || hz.error}`);
+    try {
+      const h = await get('/api/health', { Authorization: 'Bearer ' + token() });
+      if (h.json) {
+        console.log(`tunnel  up=${h.json.tunnel.up} (${h.json.tunnel.probe})`);
+        console.log(`herdr   sessions reachable ${h.json.herdr.reachable_sessions}/${h.json.herdr.total_sessions}, installed ${h.json.herdr.installed_version}, writes ${h.json.herdr.writes_enabled ? 'enabled' : 'DISABLED: ' + h.json.herdr.writes_disabled_reason}`);
+        console.log(`data    stale=${h.json.data.stale} worst_age_ms=${h.json.data.worst_age_ms}`);
+      } else console.log(`health  api/health -> ${h.status || h.error}`);
+    } catch (e) { console.log('health  token file unreadable: ' + e.code); }
+    await cmds.url();
+  },
+  async url() {
+    let u = null; try { u = fs.readFileSync(config.tunnelUrlFile, 'utf8').trim(); } catch { /* none */ }
+    let named = false; try { named = JSON.parse(fs.readFileSync(path.join(config.stateDir, 'tunnel.json'), 'utf8')).mode === 'named'; } catch { /* quick */ }
+    console.log(u ? `public url: ${u}  (${named ? 'named tunnel, persistent' : 'QUICK TUNNEL: changes every restart, no uptime guarantee'})` : 'public url: none (tunnel not running or URL not yet issued)');
+  },
+  async logs(a) { const k = a === 'tunnel' ? 'tunnel' : 'portal'; spawnSync('/usr/bin/tail', ['-n', '40', path.join(config.logDir, `${k}.log`), path.join(config.logDir, `${k}.err.log`)], { stdio: 'inherit' }); },
+  async 'token-copy'() { copyToken(); console.log('token copied to clipboard (not printed); clipboard is cleared in 60s if unchanged. Paste it into the portal login or your password manager.'); },
+  async 'rotate-token'(a) {
+    const n = createToken(); console.log(`new token created (${n} chars); old token is invalid after the portal restarts`);
+    console.log('portal', restart('portal'));
+    if (a === '--copy') { await sleep(500); copyToken(); console.log('new token copied to clipboard (cleared in 60s)'); }
+  },
+  async revoke() {
+    console.log('tunnel', stop('tunnel'));
+    createToken(); console.log('portal', loaded('portal') ? restart('portal') : 'not loaded (token replaced on disk)');
+    console.log('access revoked: tunnel stopped and token replaced. Run `portalctl start tunnel` and `portalctl token-copy` to restore.');
+  },
+  async uninstall() { for (const k of ['tunnel', 'portal']) { console.log(k, stop(k)); fs.rmSync(plistPath(k), { force: true }); } console.log('plists removed; state, logs and token kept'); },
+};
+
+const [cmd, arg] = process.argv.slice(2);
+if (!cmds[cmd]) { console.log('usage: portalctl <install|plist|start|stop|restart|status|url|logs|token-copy|rotate-token|revoke|uninstall> [portal|tunnel|--copy]'); process.exit(cmd ? 2 : 0); }
+cmds[cmd](arg).catch((e) => { console.error('error:', e.message); process.exit(1); });

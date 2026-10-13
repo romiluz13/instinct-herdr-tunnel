@@ -1,0 +1,8 @@
+node_modules/
+# fetched by scripts/fetch-herdr-docs.js; these pages belong to Herdr
+docs/official/
+# written by the proof scripts; they hold your pane ids, paths and URLs
+docs/smoke-results.json
+docs/e2e-*.json
+*.log
+.DS_Store

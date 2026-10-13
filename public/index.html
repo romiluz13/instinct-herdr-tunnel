@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Herdr portal</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main id="login" class="login" hidden>
+  <form id="login-form" autocomplete="off">
+    <h1>Herdr portal</h1>
+    <p class="muted">Sign in with the portal token. It stays in this tab's memory only.</p>
+    <label for="token">Portal token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+    <button type="submit" class="primary">Sign in</button>
+    <p id="login-error" class="error" role="alert" hidden></p>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header class="bar">
+    <h1>Herdr portal</h1>
+    <div id="pills" class="pills" aria-label="Health"></div>
+    <div class="spacer"></div>
+    <span id="fresh" class="fresh" role="status"></span>
+    <button id="refresh" type="button">Reconcile now</button>
+    <button id="logout" type="button">Sign out</button>
+  </header>
+  <div id="banner" class="banner" role="alert" hidden></div>
+  <div class="layout">
+    <nav id="tree" class="tree" aria-label="Sessions, workspaces and panes"></nav>
+    <section id="detail" class="detail" aria-live="polite">
+      <p class="muted">Select a pane to read it or send input.</p>
+    </section>
+    <aside class="results">
+      <h2>Results</h2>
+      <p id="results-empty" class="muted">No writes in this tab yet.</p>
+      <ol id="results"></ol>
+    </aside>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
