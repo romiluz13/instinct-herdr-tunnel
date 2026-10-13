@@ -319,3 +319,11 @@ test('portalctl install over an already loaded label is allowed even though that
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.ok(kit.calls().some((l) => l.startsWith('kickstart ')), 'the loaded job was kickstarted');
 });
+
+test('lib/compat: a schema variant the reader does not know is skipped, so only actions that use it are refused', () => {
+  const { parseSchema, checkAction } = require('../lib/compat');
+  const idx = parseSchema({ protocol: 22, schemas: { request: { oneOf: [{ type: 'object' }, { properties: { method: { const: 'pane.get' }, params: { $ref: '#/x/$defs/P' } } }], $defs: { P: { properties: { pane_id: {} }, required: ['pane_id'] } } } } });
+  assert.deepEqual([...idx.methods.keys()], ['pane.get']);
+  assert.equal(checkAction(idx, { sock: 'pane.get', forwards: { required: ['pane_id'] } }, () => true), null);
+  assert.match(checkAction(idx, { sock: 'pane.list', forwards: { required: [] } }, () => true), /pane\.list is not in this Herdr's schema/);
+});

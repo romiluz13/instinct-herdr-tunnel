@@ -60,7 +60,8 @@ Every write needs `session`, `pane_id`, `expect_terminal_id` (copy it from the i
 
 | HTTP | Code | Meaning |
 |---|---|---|
-| 503 | `writes_disabled` | the target session's running server does not report the pinned Herdr version and protocol (checked per write, per session), or the installed CLI did not match when the portal booted |
+| 503 | `writes_disabled` | the installed `herdr` CLI cannot run or its schema cannot be read; or the target session's running server reports a version or protocol other than the installed CLI's (checked per write, per session); or `HERDR_PORTAL_STRICT_VERSION=1` and the installed version is not the one proven live |
+| 503 | `contract_mismatch` | the installed Herdr's schema no longer fits what this action sends (a method or CLI subcommand is gone, a sent field is no longer accepted, or a new required field exists). Only that action is refused; `GET /api/health` lists it under `herdr.contract.failing_actions` |
 | 502 | `herdr_<code>` | the target session cannot be pinged, or the pane cannot be read |
 | 404 | `target_not_found` | the pane does not exist |
 | 409 | `target_ambiguous` | Herdr answered for a different pane id than the one requested |
@@ -73,7 +74,7 @@ Every write needs `session`, `pane_id`, `expect_terminal_id` (copy it from the i
 | 409 | `idempotency_conflict` | the same key was used with a different payload |
 | 502 | `dialog_unreadable` | `agent_decision` (when enabled) cannot read the pane to find the dialog |
 
-The CLI version is read once at boot: after upgrading `herdr`, restart the portal. One session on another version disables writes to that session only. `503 audit_unavailable` / `ledger_unavailable` mean a durable record cannot be written. Nothing is sent in any of these cases. `agent_decision` has its own refusals, listed in [agent_decision](agent-decision.md).
+Each write re-reads the CLI version and, when it changed, the schema, so upgrading `herdr` needs no portal restart. A session whose server still runs the old build is refused until that server restarts; other sessions are unaffected. The contract check compares request parameter names and required fields only (not types, enums, response fields or meaning), so it cannot tell that a call now means something else, which is why `GET /api/health` reports `contract.verified_live` (true only for the version proven live) and `HERDR_PORTAL_STRICT_VERSION=1` restricts writes to that version. `503 audit_unavailable` / `ledger_unavailable` mean a durable record cannot be written. Nothing is sent in any of these cases. `agent_decision` has its own refusals, listed in [agent_decision](agent-decision.md).
 
 **Result.** `status` is `input_sent` or `agent_started` (HTTP 200), `failed` (422; 403 when `agent_decision` refuses a dialog) or `needs_review` (502). `input_sent` means the input was delivered, never that the task finished. `needs_review` means the outcome is uncertain (timeout, restart between sending and recording): look at the pane before trying again with a *new* key.
 

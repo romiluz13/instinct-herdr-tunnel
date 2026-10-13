@@ -1,7 +1,9 @@
 'use strict';
 const http = require('http');
 const fs = require('fs');
-const { config, ensureDirs, PINNED_HERDR_VERSION, PINNED_PROTOCOL } = require('./lib/config');
+const { config, ensureDirs, PINNED_HERDR_VERSION } = require('./lib/config');
+const compat = require('./lib/compat');
+const { ACTIONS } = require('./lib/actions');
 const { loadTokenDigest } = require('./lib/security');
 const { Ledger } = require('./lib/ledger');
 const { Audit } = require('./lib/audit');
@@ -35,19 +37,31 @@ function tunnelProbe() {
 
   const ctx = {
     ledger, audit, inventory: new Inventory(log), locks: new Map(), waits: 0, herdrVersion: null, cliError: null,
-    // Process-wide switch: the CLI version is read ONCE at boot, so upgrading `herdr` needs a portal restart to be seen.
-    // Each write additionally pings its own target session after taking the pane lock (lib/actions.js,
-    // assertTargetCompatible) and refuses a version or protocol other than the proven one, so one odd session does not
-    // switch writes off for the others.
+    // Process-wide switch: the installed CLI must run and its schema must have been read. Which actions may write is judged
+    // per action from that schema (lib/compat.js); each write also pings its own target session after taking the pane lock
+    // (lib/actions.js, assertTargetCompatible), so one odd session does not switch writes off for the others.
+    compat: null, strict: process.env.HERDR_PORTAL_STRICT_VERSION === '1',
     get writesDisabledReason() {
       if (this.cliError) return `cannot run herdr: ${this.cliError}`;
-      if (this.herdrVersion !== PINNED_HERDR_VERSION) return `installed Herdr ${this.herdrVersion} != proven ${PINNED_HERDR_VERSION}; regenerate docs/proof-matrix.md`;
+      if (!this.compat) return 'the installed Herdr CLI schema has not been read';
+      if (this.strict && this.herdrVersion !== PINNED_HERDR_VERSION) return `HERDR_PORTAL_STRICT_VERSION=1 and installed Herdr ${this.herdrVersion} != proven ${PINNED_HERDR_VERSION}`;
       return null;
     },
     get writesEnabled() { return this.writesDisabledReason === null; },
   };
-  try { ctx.herdrVersion = await herdr.installedVersion(); } catch (e) { ctx.cliError = e.code; }
-  log('boot', { version: config.version, herdr: ctx.herdrVersion, pinned: PINNED_HERDR_VERSION, protocol_pinned: PINNED_PROTOCOL, writes_enabled: ctx.writesEnabled });
+  // Re-reads the CLI when it changed (an upgrade needs no portal restart). One read at a time; a failure keeps writes off.
+  let reading = null;
+  ctx.refreshCompat = (force = false) => (reading = reading || (async () => {
+    try {
+      const v = await herdr.installedVersion();
+      if (!force && ctx.compat && ctx.compat.version === v) return;
+      const c = await compat.evaluate(ACTIONS);
+      ctx.herdrVersion = c.version; ctx.compat = c; ctx.cliError = null;
+      log('compat', { herdr: c.version, protocol: c.protocol, verified: c.version === PINNED_HERDR_VERSION, failing: Object.keys(c.actions).filter((n) => !c.actions[n].ok) });
+    } catch (e) { ctx.compat = null; ctx.cliError = e.code || 'schema_unreadable'; }
+  })().finally(() => { reading = null; }));
+  await ctx.refreshCompat(true);
+  log('boot', { version: config.version, herdr: ctx.herdrVersion, verified_version: PINNED_HERDR_VERSION, strict: ctx.strict, writes_enabled: ctx.writesEnabled });
 
   await ctx.inventory.start();
   const server = createServer({ ctx, tokenDigest, log, tunnelProbe });

@@ -16,8 +16,8 @@
 //   node scripts/gen-proof-matrix.js            write docs/proof-matrix.md
 //   node scripts/gen-proof-matrix.js --check    run every check, print the summary, write nothing
 //
-// Needs: the pinned Herdr version installed (HERDR_BIN or `herdr` on PATH) and the docs fetched once with
-// `node scripts/fetch-herdr-docs.js`. Optional receipts: docs/smoke-results.json (scripts/smoke-actions.js) and
+// Needs: Herdr installed (HERDR_BIN or `herdr` on PATH) and the docs of that version fetched once with
+// `node scripts/fetch-herdr-docs.js --version <installed version>`. Optional receipts: docs/smoke-results.json (scripts/smoke-actions.js) and
 // docs/e2e-decision.json (scripts/decision-proof.js).
 const fs = require('fs');
 const path = require('path');
@@ -39,7 +39,7 @@ const FORBIDDEN = [
   ['token-shaped string', /(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Z])[A-Za-z0-9_-]{32,}/],
 ];
 
-function buildReport({ actions, methodOf, schema, herdrVersion, pinned, portalVersion, readDoc, cliCheck, receipts = {}, identity, generatedAt = new Date().toISOString() }) {
+function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVersion = pinned, portalVersion, readDoc, cliCheck, receipts = {}, identity, generatedAt = new Date().toISOString() }) {
   const oneOf = schema.schemas.request.oneOf;
   const defs = schema.schemas.request.$defs;
   const methods = oneOf.map((v) => v.properties.method.const);
@@ -119,7 +119,7 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, portalVe
   ];
 
   const internal = [
-    ['ping', 'liveness/version of each session socket; every write pings its own target again after taking the pane lock and refuses any version or protocol other than the proven one', 'Socket transport'],
+    ['ping', 'liveness/version of each session socket; every write pings its own target again after taking the pane lock and refuses a server whose version or protocol differs from the installed CLI whose schema was checked', 'Socket transport'],
     ['session.snapshot', 'inventory bootstrap and reconcile', 'Raw methods'],
     ['events.subscribe', 'invalidation stream (lifecycle subscriptions only; ack `subscription_started` awaited before the snapshot that may clear the stale flag)', 'Event subscriptions'],
     ['pane.get', 'write preflight: target identity (`terminal_id`), agent presence and status; `agent_decision` re-reads it right before each key send', 'Raw methods'],
@@ -159,15 +159,15 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, portalVe
   const withLive = rows.filter((r) => r.live.startsWith('PASS')).length;
   const markdown = `# Proof matrix — Herdr portal ${portalVersion}
 
-Generated ${generatedAt.slice(0, 10)} by \`scripts/gen-proof-matrix.js\`. Installed Herdr: **${herdrVersion}** (portal pinned to ${pinned}; every write re-checks its target session and refuses any other version). Schema: output of \`${SCHEMA_SRC}\` — **${methods.length}** request methods (\`/schemas/request/oneOf\`, protocol ${schema.protocol}).
+Generated ${generatedAt.slice(0, 10)} by \`scripts/gen-proof-matrix.js\`. Installed Herdr: **${herdrVersion}** (last proven live: ${pinned}; at run time every write is judged against the installed CLI's own schema, see lib/compat.js). Schema: output of \`${SCHEMA_SRC}\` — **${methods.length}** request methods (\`/schemas/request/oneOf\`, protocol ${schema.protocol}).
 
-**What this file is.** Evidence, not a switch. It enables and disables nothing: the only runtime switch is \`proof.verified\` in \`lib/actions.js\`, shown in the last column. Three different kinds of evidence are kept apart:
+**What this file is.** Evidence, not a switch. It enables and disables nothing: the runtime switches are \`proof.verified\` in \`lib/actions.js\`, shown in the last column, and the live contract check in \`lib/compat.js\`, which applies the same \`forwards\` declarations to whatever Herdr is installed when the portal runs. Three different kinds of evidence are kept apart:
 
 - **Contract (static):** the native method exists in the installed schema, every field the portal forwards is a schema field, every field the schema requires is forwarded, and the cited documentation headings exist. This proves names, not that a forwarded value is valid, what the response means or that anything executed.
 - **Live observation (historical):** the date of a past run of \`scripts/smoke-actions.js\` / \`scripts/decision-proof.js\` against a real Herdr. A receipt counts only when it carries the identity (source hash, Herdr version, protocol) of this source and Herdr build; otherwise the cell says \`untested\`. No receipt notes are copied into this file.
 - **Local fake tests:** \`npm test\` runs the allowlist against a fake Herdr; those results are not recorded here.
 
-Doc headings and sentences are checked against the raw v${pinned} source of the three Herdr pages named below (fetched by \`scripts/fetch-herdr-docs.js\`; https://herdr.dev/llms.txt lists the raw sources per release); the human URLs below are the same pages. Schema pointers and CLI commands are checked against the installed binary.
+Doc headings and sentences are checked against the raw v${docsVersion} source of the three Herdr pages named below (fetched by \`scripts/fetch-herdr-docs.js\`; https://herdr.dev/llms.txt lists the raw sources per release); the human URLs below are the same pages. Schema pointers and CLI commands are checked against the installed binary.
 
 ## A. Allowlisted actions (wrapper → native Herdr operation)
 
@@ -227,7 +227,7 @@ function main() {
       try { const out = execFileSync(config.herdrBin, [cmd[0]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return { ok: out.includes(`herdr ${cmd.join(' ')}`), text: `\`herdr ${cmd[0]}\` usage lists \`herdr ${cmd.join(' ')}\`` }; } catch { return { ok: false, text: 'CLI command not found' }; }
     }
   };
-  const r = buildReport({ actions: ACTIONS, methodOf, schema, herdrVersion, pinned: PINNED_HERDR_VERSION, portalVersion: config.version, readDoc, cliCheck, receipts: { smoke: readJson('smoke-results.json'), decision: readJson('e2e-decision.json') }, identity: receipt.make({ herdrVersion, protocol: schema.protocol }) });
+  const docsVersion = readDoc('VERSION'); const r = buildReport({ actions: ACTIONS, methodOf, schema, herdrVersion, pinned: PINNED_HERDR_VERSION, docsVersion: docsVersion ? docsVersion.trim() : PINNED_HERDR_VERSION, portalVersion: config.version, readDoc, cliCheck, receipts: { smoke: readJson('smoke-results.json'), decision: readJson('e2e-decision.json') }, identity: receipt.make({ herdrVersion, protocol: schema.protocol }) });
   if (r.leaks.length) { console.error(`refusing: the generated document would contain: ${r.leaks.join(', ')}`); process.exit(3); }
   if (!check) fs.writeFileSync(path.join(D, 'proof-matrix.md'), r.markdown);
   console.log(`${check ? 'checked (nothing written)' : 'wrote docs/proof-matrix.md'}; ${r.rows.length} actions; contract failures: ${r.contractFails}; rows with a current PASS receipt: ${r.rows.filter((x) => x.live.startsWith('PASS')).length}`);

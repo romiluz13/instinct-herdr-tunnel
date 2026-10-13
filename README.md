@@ -2,7 +2,7 @@
 
 Watch every local [Herdr](https://herdr.dev) session and steer its coding agents from your phone or another machine, through a loopback HTTP portal with a fixed allowlist, a bearer token and an audit log.
 
-![status: alpha](https://img.shields.io/badge/status-alpha-orange) ![license: MIT](https://img.shields.io/badge/license-MIT-blue) ![node >= 22](https://img.shields.io/badge/node-%3E%3D22-339933) ![npm dependencies: none](https://img.shields.io/badge/npm%20dependencies-none-brightgreen) ![Herdr 0.9.3](https://img.shields.io/badge/Herdr-0.9.3-blue)
+![status: alpha](https://img.shields.io/badge/status-alpha-orange) ![license: MIT](https://img.shields.io/badge/license-MIT-blue) ![node >= 22](https://img.shields.io/badge/node-%3E%3D22-339933) ![npm dependencies: none](https://img.shields.io/badge/npm%20dependencies-none-brightgreen) ![Herdr: schema-checked](https://img.shields.io/badge/Herdr-schema--checked-blue)
 
 Herdr's socket API has 102 request methods; some close panes, stop the server or run plugins. A script or a phone that only needs to *see* your agents and *nudge* them should not hold that power. The portal sits in front of Herdr and offers 23 actions, each with strict parameters; the 20 that call Herdr are mapped to specific Herdr calls and checked against the installed schema and Herdr's documentation. Writes are replay-safe and every change is on the record.
 
@@ -40,11 +40,11 @@ Dialogs stay with you: nothing reached the blocked agent, and the refusal is on 
 
 ## Quickstart
 
-You need Node.js 22 or newer and [Herdr](https://herdr.dev/docs/install/) **0.9.3** running. No npm dependencies. Developed and tested on macOS; the server uses only Node's standard library and Unix sockets, but nothing here was run on Linux or Windows.
+You need Node.js 22 or newer and [Herdr](https://herdr.dev/docs/install/) running (proven live on 0.9.3; newer versions are checked at run time, see Status). No npm dependencies. Developed and tested on macOS; the server uses only Node's standard library and Unix sockets, but nothing here was run on Linux or Windows.
 
 ```sh
 git clone https://github.com/romiluz13/instinct-herdr-tunnel.git && cd instinct-herdr-tunnel
-npm test                   # 58 tests against fakes; touches no real pane
+npm test                   # 67 tests against fakes; touches no real pane
 
 # create the token (32 random bytes, file mode 0600, never printed), then start the server
 node -e 'require("./lib/config").ensureDirs(); require("./lib/security").createToken()'
@@ -86,9 +86,9 @@ flowchart LR
 
 ## Status
 
-**Alpha.** One maintainer, one tested environment, one pinned Herdr version.
+**Alpha.** One maintainer, one tested environment.
 
-- **Herdr 0.9.3 only for writes.** Each write pings its target session and refuses (`503 writes_disabled`) a server on another version or protocol. Herdr 0.9.4 shipped on 2026-10-13 and is not verified yet, so against it the portal reads but refuses writes.
+- **Future Herdr versions are checked, not assumed.** The portal reads the installed `herdr api schema --json` and, per action, refuses a write (`503 contract_mismatch`, nothing sent) when a method, CLI subcommand or parameter it relies on is gone or a new required field appeared. Every write also confirms the target server runs the build that was checked. This compares request parameter names and required fields only: not types, enums, response fields or what a call now means. Live testing covered Herdr 0.9.3 only; `GET /api/health` shows `contract.verified_live`, and `HERDR_PORTAL_STRICT_VERSION=1` restricts writes to the proven version. Herdr 0.9.4 passes the contract check for all 23 actions.
 - **No rotation** of `audit.jsonl` or `ledger.jsonl`; both only grow.
 - **Remote (SSH) Herdr machines are not covered.**
 

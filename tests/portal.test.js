@@ -23,13 +23,14 @@ function req(port, method, p, { token = TOKEN, body, headers = {} } = {}) {
   });
 }
 
-async function boot(dir, port, { version, decision, decisionEnv } = {}) {
+async function boot(dir, port, { version, decision, decisionEnv, strict } = {}) {
   // The portal gives the CLI a clean env on purpose, so the fake's settings are baked into a wrapper script.
   const wrapper = path.join(dir, 'herdr');
   fs.writeFileSync(wrapper, `#!/bin/sh\nFAKE_HERDR_DIR='${dir}' FAKE_HERDR_VERSION='${version || '0.9.3'}' exec '${process.execPath}' '${path.join(__dirname, 'fixtures', 'fake-herdr-cli.js')}' "$@"\n`, { mode: 0o755 });
   const env = { PATH: process.env.PATH, HOME: dir, HERDR_PORTAL_STATE_DIR: path.join(dir, 'state'), HERDR_PORTAL_LOG_DIR: path.join(dir, 'logs'), HERDR_PORTAL_PORT: String(port), HERDR_BIN: wrapper };
   if (decision) env.HERDR_PORTAL_ENABLE_AGENT_DECISION = '1'; // agent_decision is off unless the operator opts in
   if (decisionEnv !== undefined) env.HERDR_PORTAL_ENABLE_AGENT_DECISION = decisionEnv;
+  if (strict) env.HERDR_PORTAL_STRICT_VERSION = '1';
   const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; child.stdout.on('data', (d) => (out += d)); child.stderr.on('data', (d) => (out += d));
   for (let i = 0; i < 100; i++) {
@@ -227,7 +228,7 @@ test('crash between "maybe sent" and "result recorded" is finalized as needs_rev
   assert.equal(c.herdr.writes().length, 0);
 });
 
-test('writes are disabled when the installed Herdr differs from the proven version', async (t) => {
+test('writes are refused when the installed CLI and the running server are different builds; reads keep working', async (t) => {
   const c = await setup(t, { version: '0.9.4' });
   const r = await req(c.port, 'POST', '/api/herdr/pane_send_text', { body: wb({ text: 'x' }) });
   assert.equal(r.status, 503); assert.equal(r.json.error.code, 'writes_disabled');
@@ -697,4 +698,104 @@ test('every forwarded Herdr parameter is declared in the action\'s proof (what g
   }
   assert.ok(seen.size >= 17, 'covered ' + seen.size);
   assert.deepEqual(ACTIONS['herdr.agent_decision'].proof.forwards, ACTIONS['herdr.agent_send_keys'].proof.forwards, 'the decision action sends keys exactly like agent_send_keys');
+});
+
+// ---- contract gate: any Herdr version is accepted while its schema still fits what each action sends ----
+const put = (c, name, v) => fs.writeFileSync(path.join(c.dir, name), typeof v === 'string' ? v : JSON.stringify(v));
+const sendText = (c, extra = {}) => req(c.port, 'POST', '/api/herdr/pane_send_text', { body: wb({ text: 'x', ...extra }) });
+const sendKeys = (c) => req(c.port, 'POST', '/api/herdr/pane_send_keys', { body: wb({ keys: ['ctrl+c'] }) });
+const health = async (c) => (await req(c.port, 'GET', '/api/health')).json.herdr;
+
+test('a Herdr version nobody tested is accepted for writes while its schema still fits, and health says it is not the proven one', async (t) => {
+  const c = await setup(t, { version: '0.9.9' });
+  c.herdr.state.serverVersion = '0.9.9';
+  const r = await sendText(c);
+  assert.equal(r.status, 200, r.text); assert.equal(c.herdr.writes().length, 1);
+  const h = await health(c);
+  assert.equal(h.writes_enabled, true); assert.equal(h.installed_version, '0.9.9');
+  assert.equal(h.contract.verified_live, false); assert.equal(h.contract.verified_version, '0.9.3'); assert.deepEqual(h.contract.failing_actions, []);
+});
+
+test('a schema that stopped matching one action refuses that action only, with contract_mismatch and nothing sent', async (t) => {
+  const c = await setup(t);
+  put(c, 'schema-patch.json', { dropField: { 'pane.send_text': 'text' } });
+  await c.restart();
+  const bad = await sendText(c);
+  assert.equal(bad.status, 503); assert.equal(bad.json.error.code, 'contract_mismatch'); assert.match(bad.json.error.message, /pane\.send_text no longer accepts: text.*nothing was sent/);
+  assert.equal(c.herdr.writes().length, 0);
+  assert.equal((await sendKeys(c)).status, 200, 'an unaffected action still works');
+  assert.equal((await req(c.port, 'GET', '/api/herdr/agent_list?session=default')).status, 200, 'reads are not gated');
+  const h = await health(c);
+  assert.equal(h.writes_enabled, true); assert.deepEqual(h.contract.failing_actions.map((f) => f.action), ['herdr.pane_send_text']);
+});
+
+test('a new required field, a removed method and a removed CLI subcommand are each refused', async (t) => {
+  const c = await setup(t);
+  put(c, 'schema-patch.json', { addRequired: { 'pane.send_keys': 'mode' } });
+  await c.restart();
+  const a = await sendKeys(c);
+  assert.equal(a.json.error.code, 'contract_mismatch'); assert.match(a.json.error.message, /now requires: mode/);
+  put(c, 'schema-patch.json', { drop: ['pane.process_info'] });
+  put(c, 'version.txt', '0.9.4'); c.herdr.state.serverVersion = '0.9.4'; // a CLI upgrade is noticed without a restart
+  const b = await sendText(c);
+  assert.equal(b.json.error.code, 'contract_mismatch'); assert.match(b.json.error.message, /pane\.process_info is not in this Herdr's schema/, 'a method every write preflight needs');
+  put(c, 'schema-patch.json', {}); put(c, 'no-pane-run.txt', '1'); put(c, 'version.txt', '0.9.5'); c.herdr.state.serverVersion = '0.9.5';
+  const run = await req(c.port, 'POST', '/api/herdr/pane_run', { body: wb({ pane_id: 'w1:p1', expect_terminal_id: 'term_aa01', text: 'ls' }) });
+  assert.equal(run.json.error.code, 'contract_mismatch'); assert.match(run.json.error.message, /herdr pane run. is not available/);
+  assert.equal(c.herdr.writes().length, 0);
+});
+
+test('upgrading the CLI and the server needs no portal restart; a server that did not follow is refused until it does', async (t) => {
+  const c = await setup(t);
+  assert.equal((await sendText(c)).status, 200);
+  put(c, 'version.txt', '0.9.4'); // CLI upgraded; the running server is still 0.9.3
+  const stale = await sendText(c);
+  assert.equal(stale.status, 503); assert.equal(stale.json.error.code, 'writes_disabled'); assert.match(stale.json.error.message, /restart that Herdr server/);
+  c.herdr.state.serverVersion = '0.9.4'; // the server restarted on the new build
+  assert.equal((await sendText(c)).status, 200);
+  assert.equal((await health(c)).installed_version, '0.9.4');
+  assert.equal(c.herdr.writes().length, 2);
+});
+
+test('a protocol change on either side refuses writes; both sides on the new protocol is accepted', async (t) => {
+  const c = await setup(t);
+  c.herdr.state.protocol = 23; // the server speaks 23, the CLI schema still says 22
+  assert.equal((await sendText(c)).json.error.code, 'writes_disabled');
+  put(c, 'protocol.txt', '23'); put(c, 'version.txt', '0.9.4'); c.herdr.state.serverVersion = '0.9.4';
+  assert.equal((await sendText(c)).status, 200);
+  assert.equal(c.herdr.writes().length, 1);
+});
+
+test('an unreadable CLI schema switches writes off and the next write recovers once it is readable', async (t) => {
+  const c = await setup(t);
+  put(c, 'no-schema.txt', '1'); put(c, 'version.txt', '0.9.4'); c.herdr.state.serverVersion = '0.9.4';
+  const off = await sendText(c);
+  assert.equal(off.status, 503); assert.equal(off.json.error.code, 'writes_disabled'); assert.equal(c.herdr.writes().length, 0);
+  assert.equal((await health(c)).writes_enabled, false);
+  fs.rmSync(path.join(c.dir, 'no-schema.txt'));
+  assert.equal((await sendText(c)).status, 200);
+  assert.equal((await health(c)).writes_enabled, true);
+});
+
+test('HERDR_PORTAL_STRICT_VERSION=1 limits writes to the version proven live', async (t) => {
+  const c = await setup(t, { version: '0.9.4', strict: true });
+  c.herdr.state.serverVersion = '0.9.4';
+  const r = await sendText(c);
+  assert.equal(r.status, 503); assert.equal(r.json.error.code, 'writes_disabled'); assert.match(r.json.error.message, /STRICT_VERSION/);
+  assert.equal(c.herdr.writes().length, 0);
+  const ok = await setup(t, { strict: true });
+  assert.equal((await sendText(ok)).status, 200, 'the proven version still works in strict mode');
+});
+
+test('the gate also covers agent_decision (its own method and the pane calls it makes) and optional parameters that became required', async (t) => {
+  const c = await setup(t, { decision: true });
+  put(c, 'schema-patch.json', { drop: ['pane.read'] });
+  await c.restart();
+  const dec = await req(c.port, 'POST', '/api/herdr/agent_decision', { body: wb({ pane_id: 'w1:p3', expect_terminal_id: 'term_aa03', option: 'Yes' }) });
+  assert.equal(dec.status, 503); assert.equal(dec.json.error.code, 'contract_mismatch'); assert.match(dec.json.error.message, /pane\.read is not in this Herdr's schema/);
+  put(c, 'schema-patch.json', { addRequired: { 'agent.prompt': 'wait' } }); // `wait` is optional for the portal, so a schema that requires it no longer fits
+  put(c, 'version.txt', '0.9.4'); c.herdr.state.serverVersion = '0.9.4';
+  const pr = await req(c.port, 'POST', '/api/herdr/agent_prompt', { body: wb({ pane_id: 'w1:p2', expect_terminal_id: 'term_aa02', text: 'hello' }) });
+  assert.equal(pr.json.error.code, 'contract_mismatch'); assert.match(pr.json.error.message, /agent\.prompt now requires: wait/);
+  assert.equal(c.herdr.writes().length, 0);
 });
