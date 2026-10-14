@@ -24,7 +24,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 // launchd gives services this minimal PATH; the plist records it and the install preflight runs herdr under it.
 const SERVICE_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
-const PASS_THROUGH = ['HERDR_PORTAL_STATE_DIR', 'HERDR_PORTAL_LOG_DIR', 'HERDR_PORTAL_HOSTS', 'HERDR_PORTAL_TUNNEL_METRICS', 'CLOUDFLARED_BIN'];
+const PASS_THROUGH = ['HERDR_PORTAL_STATE_DIR', 'HERDR_PORTAL_LOG_DIR', 'HERDR_PORTAL_HOSTS', 'HERDR_PORTAL_TUNNEL_METRICS', 'CLOUDFLARED_BIN', 'HERDR_PORTAL_DROP_DIR'];
 
 function plist(kind) {
   const logBase = path.join(config.logDir, kind === 'portal' ? 'portal' : 'tunnel');
@@ -136,6 +136,8 @@ const cmds = {
       const state = /\bstate = (\w[\w ]*)/.exec(r.stdout || '')?.[1];
       console.log(`${k.padEnd(7)} launchd: ${r.status === 0 ? `loaded, state=${state}, pid=${pid || '-'}` : 'not loaded'}`);
     }
+    const ext = lc('print', 'system/com.cloudflare.cloudflared'); // a tunnel installed with `cloudflared service install` runs as a LaunchDaemon, outside this tool
+    if (ext.status === 0) console.log(`daemon  com.cloudflare.cloudflared: loaded, state=${/\bstate = (\w[\w ]*)/.exec(ext.stdout || '')?.[1]}, pid=${/\bpid = (\d+)/.exec(ext.stdout || '')?.[1] || '-'}`);
     const hz = await get('/healthz');
     console.log(`portal  http://${config.host}:${config.port}/healthz -> ${hz.status || hz.error}`);
     try {
@@ -150,7 +152,9 @@ const cmds = {
   },
   async url() {
     let u = null; try { u = fs.readFileSync(config.tunnelUrlFile, 'utf8').trim(); } catch { /* none */ }
-    let named = false; try { named = JSON.parse(fs.readFileSync(path.join(config.stateDir, 'tunnel.json'), 'utf8')).mode === 'named'; } catch { /* quick */ }
+    let named = false; let host = null;
+    try { const t = JSON.parse(fs.readFileSync(path.join(config.stateDir, 'tunnel.json'), 'utf8')); named = t.mode === 'named'; host = named && typeof t.hostname === 'string' ? t.hostname : null; } catch { /* quick */ }
+    if (!u && host && lc('print', 'system/com.cloudflare.cloudflared').status === 0) u = `https://${host}`; // named tunnel run by the cloudflared service, not by tunnel-runner.js
     console.log(u ? `public url: ${u}  (${named ? 'named tunnel, persistent' : 'QUICK TUNNEL: changes every restart, no uptime guarantee'})` : 'public url: none (tunnel not running or URL not yet issued)');
   },
   async logs(a) { const k = a === 'tunnel' ? 'tunnel' : 'portal'; spawnSync('/usr/bin/tail', ['-n', '40', path.join(config.logDir, `${k}.log`), path.join(config.logDir, `${k}.err.log`)], { stdio: 'inherit' }); },

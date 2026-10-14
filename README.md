@@ -4,7 +4,7 @@ Watch every local [Herdr](https://herdr.dev) session and steer its coding agents
 
 ![status: alpha](https://img.shields.io/badge/status-alpha-orange) ![license: MIT](https://img.shields.io/badge/license-MIT-blue) ![node >= 22](https://img.shields.io/badge/node-%3E%3D22-339933) ![npm dependencies: none](https://img.shields.io/badge/npm%20dependencies-none-brightgreen) ![Herdr: schema-checked](https://img.shields.io/badge/Herdr-schema--checked-blue)
 
-Herdr's socket API has 102 request methods; some close panes, stop the server or run plugins. A script or a phone that only needs to *see* your agents and *nudge* them should not hold that power. The portal sits in front of Herdr and offers 23 actions, each with strict parameters; the 20 that call Herdr are mapped to specific Herdr calls and checked against the installed schema and Herdr's documentation. Writes are replay-safe and every change is on the record.
+Herdr's socket API has 102 request methods; some close panes, stop the server or run plugins. A script or a phone that only needs to *see* your agents and *nudge* them should not hold that power. The portal sits in front of Herdr and offers 24 actions, each with strict parameters; the 20 that call Herdr are mapped to specific Herdr calls and checked against the installed schema and Herdr's documentation. One more, `put_file`, drops a text file into a single directory. Writes are replay-safe and every change is on the record.
 
 ## See it hold the line
 
@@ -33,10 +33,11 @@ Dialogs stay with you: nothing reached the blocked agent, and the refusal is on 
 ## What you get
 
 - 🔭 **One view of every session.** `GET /api/inventory` lists all running local Herdr sessions with workspaces, tabs, panes and agent status. Data counts as stale from first sight and after any event-stream loss, until a fresh snapshot succeeds; an unreachable session shows up as a gap, never as an empty one. *Proof:* `tests/inventory.test.js`.
-- 🧱 **An allowlist in front of the socket.** 23 actions ([API](docs/api.md)); unknown actions, unknown parameters and the pane read sources that can scroll a full-screen agent are refused. *Proof:* [docs/proof-matrix.md](docs/proof-matrix.md) checks every action against the installed Herdr schema and docs.
+- 🧱 **An allowlist in front of the socket.** 24 actions ([API](docs/api.md)); unknown actions, unknown parameters and the pane read sources that can scroll a full-screen agent are refused. *Proof:* [docs/proof-matrix.md](docs/proof-matrix.md) checks every action against the installed Herdr schema and docs.
 - 🔁 **Replay-safe writes.** Each write carries an idempotency key and its result goes into an fsync'd ledger that survives restarts. A timeout or crash between "maybe sent" and "recorded" becomes `needs_review` and is never retried by the portal. *Proof:* the replay, concurrency and crash tests.
 - ⛔ **Dialogs stay with you.** Every action refuses a blocked agent and sends nothing. The one action that can answer a dialog, `agent_decision`, is off by default; enabling it is an operator choice with known residual risks ([details](docs/agent-decision.md)). *Proof:* the refusal tests in `tests/portal.test.js`.
-- 📜 **An audit trail.** One JSON line per manage action, refusals of those actions included, in `audit.jsonl`. *Proof:* the audit tests in `tests/portal.test.js`.
+- 📥 **A guarded file drop.** `put_file` writes one UTF-8 file (up to 256 KiB) into one directory and answers with the size and SHA-256 read back from disk. Paths are checked name by name, symlinks are refused, the write is temp file, `fsync`, atomic publish, mode 0600, and it never waits on Herdr. *Proof:* `tests/put-file.test.js`, [API](docs/api.md#put_file).
+- 📜 **An audit trail.** One JSON line per manage action and per `put_file` call, refusals included, in `audit.jsonl`. *Proof:* the audit tests in `tests/portal.test.js`.
 
 ## Quickstart
 
@@ -44,7 +45,7 @@ You need Node.js 22 or newer and [Herdr](https://herdr.dev/docs/install/) runnin
 
 ```sh
 git clone https://github.com/romiluz13/instinct-herdr-tunnel.git && cd instinct-herdr-tunnel
-npm test                   # 67 tests against fakes; touches no real pane
+npm test                   # 102 tests against fakes; touches no real pane
 
 # create the token (32 random bytes, file mode 0600, never printed), then start the server
 node -e 'require("./lib/config").ensureDirs(); require("./lib/security").createToken()'
@@ -77,7 +78,7 @@ flowchart LR
 
 | | |
 |---|---|
-| [API reference](docs/api.md) | endpoints, the 23 actions, errors, write semantics |
+| [API reference](docs/api.md) | endpoints, the 24 actions, errors, write semantics |
 | [Security model](docs/security.md) | what the token can do, what is and is not protected |
 | [Configuration and service](docs/configuration.md) | environment variables, `portalctl`, a second instance |
 | [Reaching it remotely](docs/tunnel.md) | Cloudflare Quick Tunnel and a named tunnel |

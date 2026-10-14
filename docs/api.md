@@ -5,8 +5,8 @@ Everything below is read from `lib/actions.js`, `lib/server.js` and `lib/validat
 ## Conventions
 
 - Base URL: `http://127.0.0.1:8787` (or your tunnel URL). All `/api/*` calls need `Authorization: Bearer <token>`; see [Security model](security.md).
-- Reads are `GET` with query parameters. Writes and `events_reconcile` are `POST` with `Content-Type: application/json` and a body of at most 16 KiB. An unknown action is `404 unknown_action`, an action that is off is `404 action_disabled` (today only `agent_decision`, see below), a wrong verb `405`, an unknown parameter `400 unknown_param`.
-- Errors: `{"ok": false, "error": {"code": "...", "message": "...", ...}}`.
+- Reads are `GET` with query parameters. Writes, `events_reconcile` and `put_file` are `POST` with `Content-Type: application/json` and a body of at most 16 KiB (`put_file`: 2 MiB, see below). A body over the limit gets `413 body_too_large` and the rest of the upload is read and discarded (for at most the 20 s request timeout) so the answer reaches the client instead of a reset. An unknown action is `404 unknown_action`, an action that is off is `404 action_disabled` (today only `agent_decision`, see below), a wrong verb `405`, an unknown parameter `400 unknown_param`.
+- Errors: `{"ok": false, "error": {"code": "...", "message": "...", ...}}`; `put_file` answers `{"ok": false, "error": "<code>", "detail": "..."}` instead.
 - Rate limits per client: 240 requests per minute (`429 rate_limited`) and 8 failed authentications per 5 minutes (`429`).
 - `session` is a Herdr session name (`default` unless you use named sessions). Pane ids look like `w1:p2`, terminal ids like `term_ab12…`.
 
@@ -50,6 +50,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8787/api/herdr/agent
 | `agent_decision` | POST (write) | `option` (at most 120 chars) | **Off by default** (`404 action_disabled`); the operator can opt in with `HERDR_PORTAL_ENABLE_AGENT_DECISION=1` in the portal's environment. Answers a blocked agent's dialog. See [agent_decision](agent-decision.md) |
 | `pane_send_text` | POST (write) | `text` (at most 2000 chars, no control characters) | Literal text, no Enter, to a pane without an agent |
 | `pane_send_keys` | POST (write) | `keys` (at most 16; Herdr key syntax) | Keys to a pane without an agent |
+| `put_file` | POST (file) | `path`, `content`, `sha256`, `mode?` = `create` (default) or `overwrite`, `action?` = `put_file` | Writes one UTF-8 text file under the drop root and answers with its path, size and sha256 read back from disk. Calls no Herdr method and does not wait on Herdr. See [put_file](#put_file) |
 | `pane_run` | POST (write) | `text` (at most 2000 chars, one line, must not start with `-`) | Types a command line plus Enter into a shell pane via `herdr pane run`. **The portal does not run it; the shell in that pane does** |
 
 Which Herdr call each action makes, with the schema pointer and the documentation section it was checked against, is in [proof-matrix.md](proof-matrix.md).
@@ -79,3 +80,41 @@ Each write re-reads the CLI version and, when it changed, the schema, so upgradi
 **Result.** `status` is `input_sent` or `agent_started` (HTTP 200), `failed` (422; 403 when `agent_decision` refuses a dialog) or `needs_review` (502). `input_sent` means the input was delivered, never that the task finished. `needs_review` means the outcome is uncertain (timeout, restart between sending and recording): look at the pane before trying again with a *new* key.
 
 **Replay.** The result of a write is stored under its `idempotency_key` in `ledger.jsonl` (fsync'd, survives restarts). Repeating the key returns the stored result with `"replayed": true` and sends nothing.
+
+## put_file
+
+`POST /api/herdr/put_file` writes one UTF-8 text file into the **drop root** and tells you what is on disk afterwards. The drop root is `HERDR_PORTAL_DROP_DIR`, by default `inbox/` inside the state directory; it is created with mode 0700 if missing. Nothing outside it can be written, and the action neither runs nor interprets the content.
+
+```sh
+BODY='{"path":"notes/today.md","content":"hello\n","sha256":"'$(printf 'hello\n' | shasum -a 256 | cut -d' ' -f1)'"}'
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$BODY" http://127.0.0.1:8787/api/herdr/put_file
+# {"ok":true,"path":"<drop root>/notes/today.md","bytes":6,"sha256":"5891b5b5...","mode_used":"create"}
+```
+
+| Field | Rule |
+|---|---|
+| `path` | Relative to the drop root, or absolute and inside it. Components use only `A-Z a-z 0-9 . _ -`, may not start with a dot, and may not be empty, `.` or `..` (so `%2e%2e` and a NUL byte are refused too); at most 1024 characters and 16 levels, and short enough that the drop root plus the path plus the temp name stay under 1024 bytes (`path_invalid`, before anything is created). Missing subdirectories are created with mode 0700 |
+| `content` | Valid UTF-8 text, at most 262,144 bytes once encoded. A lone surrogate, or bytes that are not UTF-8 in the request body, are refused; nothing is replaced |
+| `sha256` | Hex (any case) of the UTF-8 bytes of `content`. Checked before anything on disk is touched |
+| `mode` | `create` (default) fails with `409 exists` if the file is there; `overwrite` replaces it atomically |
+| `action` | Optional; if present it must be `put_file` |
+
+Success: `{"ok": true, "path": "<absolute resolved path>", "bytes": N, "sha256": "<hex>", "mode_used": "create|overwrite"}`. `path`, `bytes` and `sha256` come from re-reading the file from disk after it was published, not from the request. Failure: `{"ok": false, "error": "<code>", "detail": "..."}` and nothing is written.
+
+| HTTP | `error` | Meaning |
+|---|---|---|
+| 400 | `path_invalid` | empty, too long, NUL byte, `.`/`..`/empty component, or a character outside the allowed set |
+| 400 | `content_not_utf8` / `sha256_invalid` / `bad_json` / `invalid_param` / `missing_param` / `unknown_param` | the body is not UTF-8 or not a JSON object, or a field is missing, unknown or of the wrong type |
+| 403 | `path_outside_root` | an absolute path that is not inside the drop root |
+| 403 | `symlink_refused` | any component, or the target, is a symbolic link, or a directory resolves outside the root |
+| 409 | `exists` / `is_directory` / `not_a_directory` / `not_regular_file` | the destination does not allow this write |
+| 413 | `content_too_large` | more than 262,144 bytes of content |
+| 413 | `body_too_large` | request body over 2 MiB (262,144 bytes of content can need up to 1.5 MiB as JSON `\u` escapes) |
+| 422 | `sha256_mismatch` | the hash does not match the received bytes; `detail` carries the hash that was computed |
+| 503 | `drop_root_missing` / `drop_root_unsafe` / `audit_unavailable` | the root is not a directory owned by the portal user and closed to others, or the audit log cannot be written |
+| 500 | `write_failed` / `readback_mismatch` / `readback_failed` | an I/O error, or the file on disk is not what was received (should not happen) |
+
+How it writes: a temp file `.put_file-<random>.tmp` is created in the target's directory (mode 0600, exclusive, never through a symlink), written, `fsync`ed, then published with `rename(2)` (`overwrite`) or `link(2)` (`create`, which cannot replace an existing file even when two requests race). A reader sees the old file, no file, or the new complete file, never a partial one. The file ends up mode 0600. `create` needs a drop root on a filesystem that supports hard links (`link(2)`); on one that does not, `create` answers `500 write_failed` (use `overwrite`, or a different `HERDR_PORTAL_DROP_DIR`). A hard kill of the portal between the temp write and the publish can leave a `.put_file-*.tmp` file behind; it is never visible under a requested name. The directory itself is not `fsync`ed, so after a power loss a just-published file may be absent, never partial.
+
+`put_file` does not touch Herdr, so it is not tied to the Herdr contract check, the pane locks or the ledger, and it keeps answering when Herdr is slow or down. Two calls to the same destination are served one after the other. It does use the audit log (one line per authenticated call, including a body that is too large, not JSON or not UTF-8; `audit_unavailable` when it cannot be written) and the per-client rate limit. Audit lines carry the requested and resolved path, size, hash, result and error code, never the content. It is the one action that writes to the machine's filesystem; see [Security model](security.md).
+

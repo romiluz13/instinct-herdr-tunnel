@@ -12,6 +12,7 @@ function start(sockPath) {
     },
     fg: {}, serverVersion: '0.9.3', protocol: 22, errorOn: {},
     hangOn: null, // method name that closes the connection without answering
+    delayMs: {}, // method -> milliseconds before the answer is written (a slow or busy Herdr)
     // pane_id -> { header: string[], options: string[], cursor, numbered, afterEnter: 'clear'|'stay', ignoreMoves }
     dialogs: {}, chosen: {}, calls: 0, onCall: null, // onCall(req, n) runs before each request is handled
     subscribers: [],
@@ -35,8 +36,9 @@ function start(sockPath) {
         const req = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
         calls.push({ method: req.method, params: req.params });
         state.calls += 1; if (state.onCall) state.onCall(req, state.calls);
-        const reply = (result) => sock.write(JSON.stringify({ id: req.id, result }) + '\n');
-        const err = (code, message) => sock.write(JSON.stringify({ id: req.id, error: { code, message } }) + '\n');
+        const out = (line) => (state.delayMs[req.method] ? setTimeout(() => sock.write(line), state.delayMs[req.method]) : sock.write(line));
+        const reply = (result) => out(JSON.stringify({ id: req.id, result }) + '\n');
+        const err = (code, message) => out(JSON.stringify({ id: req.id, error: { code, message } }) + '\n');
         if (state.hangOn === req.method) { sock.destroy(); continue; }
         if (state.errorOn[req.method]) { err(state.errorOn[req.method], 'forced'); continue; }
         const pane = req.params && state.panes[req.params.pane_id || req.params.target];

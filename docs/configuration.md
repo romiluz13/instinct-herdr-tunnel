@@ -8,6 +8,7 @@
 | `HERDR_PORTAL_STATE_DIR` | `~/Library/Application Support/herdr-portal` | Token (`secrets/portal-token`), `ledger.jsonl`, `tunnel.json`, `tunnel-url.txt` |
 | `HERDR_PORTAL_LOG_DIR` | `~/Library/Logs/herdr-portal` | `audit.jsonl` and the service logs |
 | `HERDR_BIN` | `herdr` on `PATH` | The Herdr CLI. Under launchd set an absolute path; if `herdr` is a version-manager shim, point at the real binary |
+| `HERDR_PORTAL_DROP_DIR` | `<state dir>/inbox` | The only directory `put_file` writes to. Created with mode 0700 if missing; an existing one is not chmod'ed and must be owned by the portal user and not writable by others. It must support hard links (`create` mode uses `link(2)`) |
 | `HERDR_PORTAL_HOSTS` | none | Extra allowed `Host` names, comma separated |
 | `HERDR_PORTAL_TUNNEL_METRICS` | `127.0.0.1:20241` | Where `cloudflared` serves its metrics; the portal probes it for `/api/health` |
 | `CLOUDFLARED_BIN` | `cloudflared` on `PATH` | The tunnel binary |
@@ -15,7 +16,7 @@
 | `HERDR_PORTAL_STRICT_VERSION` | unset (off) | `1` limits writes to the Herdr version proven live (0.9.3); otherwise any version whose schema fits is accepted |
 | `HERDR_PORTAL_ENABLE_AGENT_DECISION` | unset (off) | `1` enables `agent_decision`; any other value leaves it off. `portalctl install` copies it into the portal LaunchAgent (not the tunnel's) only when set to `1` at install time |
 
-Directories, variables and launchd labels keep the project's earlier internal name, `herdr-portal`, so existing installs keep their token, ledger and audit log. `portalctl install` copies the port, `HERDR_BIN` and, when set at install time, `HERDR_PORTAL_STATE_DIR`, `HERDR_PORTAL_LOG_DIR`, `HERDR_PORTAL_HOSTS`, `HERDR_PORTAL_TUNNEL_METRICS` and `CLOUDFLARED_BIN` into the LaunchAgents, plus `HERDR_PORTAL_ENABLE_AGENT_DECISION=1` into the portal's only.
+Directories, variables and launchd labels keep the project's earlier internal name, `herdr-portal`, so existing installs keep their token, ledger and audit log. `portalctl install` copies the port, `HERDR_BIN` and, when set at install time, `HERDR_PORTAL_STATE_DIR`, `HERDR_PORTAL_LOG_DIR`, `HERDR_PORTAL_HOSTS`, `HERDR_PORTAL_TUNNEL_METRICS`, `HERDR_PORTAL_DROP_DIR` and `CLOUDFLARED_BIN` into the LaunchAgents, plus `HERDR_PORTAL_ENABLE_AGENT_DECISION=1` into the portal's only.
 
 ## Running as a service (macOS)
 

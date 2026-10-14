@@ -96,7 +96,7 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVers
       native = `CLI \`herdr ${p.cli.join(' ')}\`<br>${c.text}<br>not a socket method: \`${other}\` ${methods.includes(other) ? 'EXISTS' : 'absent from schema'}`;
     } else if (p.portal) {
       const usesOk = (p.uses || []).every((m) => methods.includes(m)); checks.push(usesOk);
-      native = (p.uses || []).length ? `portal operation (not a Herdr method); built from ${p.uses.map((m) => `\`${m}\` (/schemas/request/oneOf/${methods.indexOf(m)})`).join(', ')}` : 'portal operation (not a Herdr method, makes no Herdr call): reads the portal\'s own `audit.jsonl`';
+      native = (p.uses || []).length ? `portal operation (not a Herdr method); built from ${p.uses.map((m) => `\`${m}\` (/schemas/request/oneOf/${methods.indexOf(m)})`).join(', ')}` : `portal operation (not a Herdr method, makes no Herdr call): ${p.native || 'reads the portal\'s own `audit.jsonl`'}`;
     }
     const docs = (p.docs || []).map(([u, s]) => { const c = docCheck(u, s); checks.push(c.ok); return c.text; });
     const contractOk = checks.every(Boolean); if (!contractOk) contractFails += 1;

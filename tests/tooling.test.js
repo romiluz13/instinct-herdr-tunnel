@@ -129,6 +129,15 @@ test('scripts/e2e.js receipts carry the identity but neither the base address no
   assert.ok(!JSON.stringify(rec).includes('herdr.sock'), 'no socket path');
 });
 
+test('scripts/put-file-proof.js passes against a portal, cleans up after itself and prints neither the token nor the address', async (t) => {
+  const p = await portalOnFake(t);
+  const r = await runAsync(['scripts/put-file-proof.js', '--base', p.base], p.env);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ALL PASSED/); assert.ok(!/FAIL /.test(r.stdout));
+  assert.ok(!r.stdout.includes(p.base) && !r.stdout.includes(fs.readFileSync(path.join(p.dir, 'state', 'secrets', 'portal-token'), 'utf8').trim()));
+  assert.deepEqual(fs.readdirSync(path.join(p.dir, 'state', 'inbox')), [], 'the proof directory was removed');
+});
+
 test('docs/api.md lists exactly the actions the server exposes', () => {
   const { ACTIONS } = require('../lib/actions');
   const doc = fs.readFileSync(path.join(ROOT, 'docs', 'api.md'), 'utf8');
@@ -274,6 +283,22 @@ const refused = async (kit, env, re) => {
   assert.equal(r.status, 1, r.stdout + r.stderr); assert.match(r.stderr, re); assert.match(r.stderr, /nothing was written and no service was started/);
   kit.untouched(); assert.deepEqual(kit.calls(), [], 'launchctl was never asked to change anything');
 };
+
+test('portalctl url and status understand a named tunnel run by the cloudflared service (a LaunchDaemon, not tunnel-runner.js)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hp-ctl-'));
+  const lcFile = path.join(home, 'launchctl');
+  const state = path.join(home, 'st'); fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, 'tunnel.json'), JSON.stringify({ mode: 'named', hostname: 'portal.example.org' }));
+  const env = (loaded) => ({ HOME: home, HERDR_PORTAL_STATE_DIR: state, HERDR_PORTAL_LOG_DIR: path.join(home, 'lg'), HERDR_PORTAL_PORT: '1', HERDR_PORTAL_LAUNCHCTL: lcFile, FAKE_DAEMON: loaded ? '1' : '0' });
+  fs.writeFileSync(lcFile, '#!/bin/sh\nif [ "$1" = print ] && [ "$2" = system/com.cloudflare.cloudflared ] && [ "$FAKE_DAEMON" = 1 ]; then printf "state = running\\npid = 4242\\n"; exit 0; fi\nexit 1\n', { mode: 0o755 });
+  try {
+    const up = run(['bin/portalctl', 'url'], env(true));
+    assert.match(up.stdout, /public url: https:\/\/portal\.example\.org {2}\(named tunnel, persistent\)/);
+    assert.match(run(['bin/portalctl', 'url'], env(false)).stdout, /public url: none/, 'nothing is printed when the daemon is not loaded');
+    assert.match(run(['bin/portalctl', 'status'], env(true)).stdout, /daemon {2}com\.cloudflare\.cloudflared: loaded, state=running, pid=4242/);
+    assert.ok(!/daemon {2}com\.cloudflare/.test(run(['bin/portalctl', 'status'], env(false)).stdout));
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 
 test('portalctl install refuses, before writing anything, when herdr is not an absolute path, not executable, or fails under launchd\'s environment', async (t) => {
   const kit = installKit(); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));

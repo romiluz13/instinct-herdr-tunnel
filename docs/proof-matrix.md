@@ -1,6 +1,6 @@
 # Proof matrix — Herdr portal 1.0.0
 
-Generated 2026-10-13 by `scripts/gen-proof-matrix.js`. Installed Herdr: **0.9.4** (last proven live: 0.9.3; at run time every write is judged against the installed CLI's own schema, see lib/compat.js). Schema: output of `herdr api schema --json` — **102** request methods (`/schemas/request/oneOf`, protocol 22).
+Generated 2026-10-14 by `scripts/gen-proof-matrix.js`. Installed Herdr: **0.9.4** (last proven live: 0.9.3; at run time every write is judged against the installed CLI's own schema, see lib/compat.js). Schema: output of `herdr api schema --json` — **102** request methods (`/schemas/request/oneOf`, protocol 22).
 
 **What this file is.** Evidence, not a switch. It enables and disables nothing: the runtime switches are `proof.verified` in `lib/actions.js`, shown in the last column, and the live contract check in `lib/compat.js`, which applies the same `forwards` declarations to whatever Herdr is installed when the portal runs. Three different kinds of evidence are kept apart:
 
@@ -37,8 +37,9 @@ Doc headings and sentences are checked against the raw v0.9.4 source of the thre
 | `herdr.pane_send_text` | POST | socket `pane.send_text`<br>`herdr api schema --json` `/schemas/request/oneOf/74` → `/schemas/request/$defs/PaneSendTextParams`<br>schema params: `pane_id`, `text`; required: `pane_id`, `text`<br>forwarded: `pane_id`, `text` (all are schema fields; every required field is sent) | `session`, `pane_id`, `expect_terminal_id`, `request_id`, `idempotency_key`, `text` | https://herdr.dev/docs/cli-reference/#panes<br>https://herdr.dev/docs/socket-api/#raw-methods | pass | untested | on |
 | `herdr.pane_send_keys` | POST | socket `pane.send_keys`<br>`herdr api schema --json` `/schemas/request/oneOf/75` → `/schemas/request/$defs/PaneSendKeysParams`<br>schema params: `keys`, `pane_id`; required: `pane_id`, `keys`<br>forwarded: `pane_id`, `keys` (all are schema fields; every required field is sent) | `session`, `pane_id`, `expect_terminal_id`, `request_id`, `idempotency_key`, `keys` | https://herdr.dev/docs/cli-reference/#panes<br>https://herdr.dev/docs/socket-api/#raw-methods | pass | untested | on |
 | `herdr.pane_run` | POST | CLI `herdr pane run`<br>`herdr pane run --help` exit 0 (0.9.4)<br>not a socket method: `pane.run` absent from schema | `session`, `pane_id`, `expect_terminal_id`, `request_id`, `idempotency_key`, `text` | https://herdr.dev/docs/cli-reference/#panes<br>https://herdr.dev/docs/agent-automation/#choose-the-control-surface | pass | untested | on |
+| `herdr.put_file` | POST | portal operation (not a Herdr method, makes no Herdr call): writes one file under the drop root (`lib/dropbox.js`) | `action`, `path`, `content`, `sha256`, `mode` |  | pass | untested | on |
 
-Rows A-total: 23; contract failures: 0; rows with a current PASS receipt: 0.
+Rows A-total: 24; contract failures: 0; rows with a current PASS receipt: 0.
 
 ## B. Requested/possible things that are NOT enabled
 
