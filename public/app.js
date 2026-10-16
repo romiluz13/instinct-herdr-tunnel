@@ -7,7 +7,8 @@
   let unreachable = null;
   let health = null;
   let sel = null; // {session, pane_id}
-  let paneRead = null; // {source, text, at, error}
+  let paneRead = null; // {source, text, at, error, terminal_id}
+  let readGen = 0; // bumped per read and per selection, so a late answer to an older request is dropped
   const results = [];
   const pending = {}; // per form: {sig, key}
   const $ = (id) => document.getElementById(id);
@@ -141,18 +142,32 @@
   };
 
   async function selectPane(session, pane_id) {
-    sel = { session, pane_id }; paneRead = null; render();
+    sel = { session, pane_id }; paneRead = null; readGen += 1; render();
     await readPane('visible');
   }
 
+  // read-guard:start
+  // The server checks the terminal with pane.get before pane.read; the two calls are not atomic, so a terminal
+  // swapped between them is still read. Herdr's read result echoes the pane but not the terminal.
+  function readVerdict(want, now, body) {
+    if (now.gen !== want.gen || !now.sel || now.sel.session !== want.session || now.sel.pane_id !== want.pane_id) return 'drop';
+    if (!body || !body.ok) return 'error';
+    const echoed = body.result && body.result.read && body.result.read.pane_id;
+    if (body.session !== want.session || echoed !== want.pane_id || body.checked_terminal_id !== want.terminal_id) return 'mismatch';
+    return 'show';
+  }
+  // read-guard:end
+
   async function readPane(source) {
-    if (!sel) return;
-    const { session, pane_id } = sel;
-    const r = await api(`/api/herdr/pane_read?session=${encodeURIComponent(session)}&pane_id=${encodeURIComponent(pane_id)}&source=${source}`);
-    if (!sel || sel.pane_id !== pane_id) return;
-    paneRead = r.json && r.json.ok
-      ? { source, text: r.json.result.read.text, at: r.json.fetched_at }
-      : { source, error: r.json ? `${r.json.error.code}: ${r.json.error.message}` : `HTTP ${r.status}` };
+    const f = findPane();
+    if (!sel || !f) return;
+    const want = { gen: ++readGen, session: sel.session, pane_id: sel.pane_id, terminal_id: f.p.terminal_id };
+    const r = await api(`/api/herdr/pane_read?session=${encodeURIComponent(want.session)}&pane_id=${encodeURIComponent(want.pane_id)}&source=${source}&expect_terminal_id=${encodeURIComponent(want.terminal_id)}`);
+    const v = readVerdict(want, { gen: readGen, sel }, r.json);
+    if (v === 'drop') return;
+    paneRead = v === 'show' ? { source, text: r.json.result.read.text, at: r.json.fetched_at, terminal_id: want.terminal_id }
+      : v === 'mismatch' ? { source, error: 'the answer does not match the selected session, pane and terminal; read again' }
+        : { source, error: r.json ? `${r.json.error.code}: ${r.json.error.message}` : `HTTP ${r.status}` };
     renderDetail();
   }
 
@@ -216,9 +231,10 @@
       h('button', { type: 'button', onclick: () => readPane('visible') }, 'Read visible'),
       h('button', { type: 'button', onclick: () => readPane('detection') }, 'Read detection'),
       h('span', { class: 'muted' }, 'Only these two sources are allowed; scrollback reads are refused.')));
+    if (paneRead && paneRead.terminal_id && paneRead.terminal_id !== p.terminal_id) paneRead = { source: paneRead.source, error: 'the pane now hosts another terminal; this read was from the previous one. Read again.' };
     if (paneRead) {
       d.append(paneRead.error ? h('p', { class: 'error', role: 'alert' }, 'Read failed — ' + paneRead.error)
-        : h('div', {}, h('div', { class: 'muted' }, `${paneRead.source} · read ${paneRead.at}`), h('pre', { class: 'term', tabindex: '0', 'aria-label': 'Pane output' }, paneRead.text || '(empty)')));
+        : h('div', {}, h('div', { class: 'muted' }, `${paneRead.source} · ${s.session} / ${p.pane_id} · terminal ${paneRead.terminal_id} checked just before the read · read ${paneRead.at}`), h('pre', { class: 'term', tabindex: '0', 'aria-label': 'Pane output' }, paneRead.text || '(empty)')));
     }
 
     const term = d.querySelector('pre.term'); if (term) term.scrollTop = term.scrollHeight; // newest output is at the bottom

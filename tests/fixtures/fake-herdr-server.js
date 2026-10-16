@@ -47,9 +47,15 @@ function start(sockPath) {
           case 'session.snapshot': reply({ type: 'session_snapshot', snapshot: snapshot() }); break;
           case 'events.subscribe': reply({ type: 'subscription_started' }); state.subscribers.push(sock); break;
           case 'pane.get': pane ? reply({ type: 'pane_info', pane }) : err('pane_not_found', 'pane not found'); break;
+          // Result shapes per the 0.9.4 schema's ResponseResult (workspace_list/_info, tab_list/_info, pane_list).
+          case 'workspace.list': reply({ type: 'workspace_list', workspaces: snapshot().workspaces }); break;
+          case 'workspace.get': { const w = snapshot().workspaces.find((x) => x.workspace_id === req.params.workspace_id); w ? reply({ type: 'workspace_info', workspace: w }) : err('workspace_not_found', 'workspace not found'); break; }
+          case 'tab.list': reply({ type: 'tab_list', tabs: snapshot().tabs }); break;
+          case 'tab.get': { const x = snapshot().tabs.find((y) => y.tab_id === req.params.tab_id); x ? reply({ type: 'tab_info', tab: x }) : err('tab_not_found', 'tab not found'); break; }
+          case 'pane.list': reply({ type: 'pane_list', panes: snapshot().panes }); break;
           case 'agent.get': pane && pane.agent ? reply({ type: 'agent_info', agent: pane }) : err('agent_not_found', 'no agent'); break;
-          case 'pane.read': if (pane && state.dialogs[pane.pane_id]) { reply({ type: 'pane_read', read: { text: screen(state.dialogs[pane.pane_id]), source: req.params.source } }); break; }
-            reply({ type: 'pane_read', read: { text: pane && pane.agent_status === 'blocked' ? 'Allow this command? [y/n]' : 'hello from ' + req.params.source, source: req.params.source } }); break;
+          case 'pane.read': if (pane && state.dialogs[pane.pane_id]) { reply({ type: 'pane_read', read: { pane_id: req.params.pane_id, text: screen(state.dialogs[pane.pane_id]), source: req.params.source } }); break; }
+            reply({ type: 'pane_read', read: { pane_id: req.params.pane_id, text: pane && pane.agent_status === 'blocked' ? 'Allow this command? [y/n]' : 'hello from ' + req.params.source, source: req.params.source } }); break;
           case 'pane.process_info': reply({ type: 'pane_process_info', process_info: { pane_id: req.params.pane_id, foreground_processes: [{ argv0: (state.fg[req.params.pane_id] || 'zsh'), name: (state.fg[req.params.pane_id] || 'zsh') }] } }); break;
           case 'agent.list': reply({ type: 'agent_list', agents: snapshot().agents }); break;
           case 'agent.wait': reply({ type: 'agent_info', agent: pane }); break;

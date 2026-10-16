@@ -40,6 +40,10 @@ test('portalctl plist: prints the LaunchAgent definition without installing anyt
     assert.match(on.stdout, /<key>HERDR_PORTAL_ENABLE_AGENT_DECISION<\/key><string>1<\/string>/, 'an explicit opt-in reaches the portal service');
     assert.ok(!run(['bin/portalctl', 'plist', 'portal'], { ...env, HERDR_PORTAL_ENABLE_AGENT_DECISION: 'true' }).stdout.includes('ENABLE_AGENT_DECISION'), 'only "1" counts');
     assert.ok(!run(['bin/portalctl', 'plist', 'tunnel'], { ...env, HERDR_PORTAL_ENABLE_AGENT_DECISION: '1' }).stdout.includes('ENABLE_AGENT_DECISION'), 'the tunnel service never gets it');
+    assert.ok(!p.stdout.includes('STRICT_VERSION'), 'strict version stays off in the service by default');
+    assert.match(run(['bin/portalctl', 'plist', 'portal'], { ...env, HERDR_PORTAL_STRICT_VERSION: '1' }).stdout, /<key>HERDR_PORTAL_STRICT_VERSION<\/key><string>1<\/string>/, 'strict mode chosen at install reaches the portal service');
+    assert.ok(!run(['bin/portalctl', 'plist', 'portal'], { ...env, HERDR_PORTAL_STRICT_VERSION: 'yes' }).stdout.includes('STRICT_VERSION'), 'only "1" counts for strict');
+    assert.ok(!run(['bin/portalctl', 'plist', 'tunnel'], { ...env, HERDR_PORTAL_STRICT_VERSION: '1' }).stdout.includes('STRICT_VERSION'), 'the tunnel service never gets strict');
     const t = run(['bin/portalctl', 'plist', 'tunnel'], { ...env, HERDR_PORTAL_LAUNCHD_PREFIX: 'org.example.hp' });
     assert.match(t.stdout, /<key>Label<\/key><string>org\.example\.hp\.tunnel<\/string>/);
     assert.ok(t.stdout.includes(path.join(ROOT, 'bin', 'tunnel-runner.js')));
@@ -107,6 +111,55 @@ test('scripts/smoke-actions.js and decision-proof.js read the token from the con
   assert.ok(!JSON.stringify(saved).includes('127.0.0.1') && !JSON.stringify(saved).includes(p.dir), 'no address or path in the receipt');
   const d = await runAsync(['scripts/decision-proof.js', '--base', p.base], p.env);
   assert.equal(d.status, 2); assert.match(d.stderr, /missing --refuse-pane/);
+});
+
+// A proxy in front of a fake-backed portal that breaks exactly one path, so a smoke failure is real HTTP, not a stub script.
+async function breakingProxy(t, base, brokenPath, reply) {
+  const server = require('node:http').createServer(async (req, res) => {
+    if (req.url.split('?')[0] === brokenPath) { res.writeHead(reply.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reply.body)); }
+    let body = ''; for await (const c of req) body += c;
+    const r = await fetch(base + req.url, { method: req.method, headers: { Authorization: req.headers.authorization, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body || undefined });
+    res.writeHead(r.status, { 'Content-Type': 'application/json' }); res.end(await r.text());
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test('scripts/smoke-actions.js: a failed check exits 1 and still writes its receipt naming the failure', async (t) => {
+  const p = await portalOnFake(t);
+  const base = await breakingProxy(t, p.base, '/api/herdr/tab_list', { status: 500, body: { ok: false, error: { code: 'internal' } } });
+  const out = path.join(p.dir, 'smoke.json');
+  const s = await runAsync(['scripts/smoke-actions.js', '--base', base, '--out', out], p.env);
+  assert.equal(s.status, 1, s.stdout + s.stderr);
+  const saved = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.equal(saved.results['herdr.tab_list'].ok, false);
+  assert.deepEqual(saved.summary.failed, ['herdr.tab_list']);
+  assert.equal(saved.summary.incomplete, undefined);
+});
+
+test('scripts/smoke-actions.js: a run that crashes part-way exits 1 with a receipt marked incomplete', async (t) => {
+  const p = await portalOnFake(t);
+  const base = await breakingProxy(t, p.base, '/api/herdr/agent_list', { status: 500, body: { ok: false } });
+  const out = path.join(p.dir, 'smoke.json');
+  const s = await runAsync(['scripts/smoke-actions.js', '--base', base, '--out', out], p.env);
+  assert.equal(s.status, 1, s.stdout + s.stderr);
+  const saved = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.equal(saved.summary.incomplete, true);
+  assert.equal(saved.results['herdr.ping'].ok, true, 'checks before the crash are kept');
+  assert.ok(!JSON.stringify(saved).includes(p.dir), 'no path in the receipt');
+});
+
+test('scripts/smoke-actions.js: an all-pass read run exits 0 and names the skipped writes as unexercised, not passed', async (t) => {
+  const p = await portalOnFake(t);
+  const out = path.join(p.dir, 'smoke.json');
+  const s = await runAsync(['scripts/smoke-actions.js', '--base', p.base, '--out', out], p.env);
+  assert.equal(s.status, 0, s.stdout + s.stderr);
+  const skipped = ['herdr.pane_send_text', 'herdr.pane_send_keys', 'herdr.pane_run', 'herdr.agent_start', 'herdr.agent_send_keys', 'herdr.agent_prompt'];
+  const saved = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.deepEqual(saved.summary, { failed: [], unexercised: skipped });
+  for (const a of skipped) assert.equal(saved.results[a], undefined, `${a} has no result row`);
+  assert.match(s.stdout, /UNEXERCISED \(not evidence\): herdr\.pane_send_text/);
 });
 
 test('scripts/decision-proof.js no longer answers a folder-trust dialog: the old scenario is refused before the token is read or any request is made', () => {
@@ -182,8 +235,28 @@ test('proof matrix: contract passes for the real allowlist against a schema that
   assert.ok(!/\*\*FORWARDED PARAMETERS DO NOT MATCH/.test(r.markdown), 'every declared parameter list matches the synthetic schema');
 });
 
+test('receipt identity: the code digest covers every server module, so a security.js change is a different build', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hp-id-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(tmp, 'lib'));
+  fs.copyFileSync(path.join(ROOT, 'server.js'), path.join(tmp, 'server.js'));
+  for (const f of fs.readdirSync(path.join(ROOT, 'lib'))) fs.copyFileSync(path.join(ROOT, 'lib', f), path.join(tmp, 'lib', f));
+  const before = receiptId.sourceDigest(tmp);
+  assert.equal(before, receiptId.sourceDigest(ROOT));
+  fs.appendFileSync(path.join(tmp, 'lib', 'security.js'), '\n// changed\n');
+  assert.notEqual(receiptId.sourceDigest(tmp), before);
+});
+
+test('proof matrix: a receipt from a server running other code than the checkout is untested', () => {
+  const now = receiptId.make({ herdrVersion: '0.9.3', protocol: 22, served: { code_sha256: receiptId.sourceDigest() } });
+  const live = (identity) => rowOf(report({ receipts: { smoke: { identity, results: { 'herdr.ping': { ok: true, at: '2026-10-13T10:00:00Z' } } } } }), 'herdr.ping').live;
+  assert.equal(live(now), 'PASS 2026-10-13');
+  assert.match(live({ ...now, served_code_sha256: '1'.repeat(64) }), /^untested/);
+  assert.match(live(receiptId.make({ herdrVersion: '0.9.3', protocol: 22 })), /^untested/, 'no served identity, no evidence');
+});
+
 test('proof matrix: receipt notes, screens, paths, addresses and ids never reach the document', () => {
-  const identity = receiptId.make({ herdrVersion: '0.9.3', protocol: 22 });
+  const identity = receiptId.make({ herdrVersion: '0.9.3', protocol: 22, served: { code_sha256: receiptId.sourceDigest() } });
   const hostile = { ok: true, at: '2026-10-13T10:00:00.000Z', note: 'SENTINEL_NOTE /home/someone/proj 127.0.0.1:8787 w9:p9 term_aa01bb https://fake-name-example.trycloudflare.com', screen: 'SENTINEL_SCREEN', base: 'http://127.0.0.1:1', token: 'tok_' + 'A1'.repeat(20) };
   const r = report({ receipts: { smoke: { identity, base: 'http://127.0.0.1:1', results: { 'herdr.ping': hostile, 'herdr.pane_get': { ...hostile, ok: false } } }, decision: { identity, results: { 'herdr.audit_tail': hostile } } } });
   assert.ok(!/SENTINEL|home\/someone|trycloudflare|aa01bb|tok_|127\.0\.0\.1|w9:p9/.test(r.markdown), 'nothing from a receipt but pass/fail and a date');
@@ -194,7 +267,7 @@ test('proof matrix: receipt notes, screens, paths, addresses and ids never reach
 });
 
 test('proof matrix: a receipt counts only for this exact source and Herdr build; anything else is untested', () => {
-  const now = receiptId.make({ herdrVersion: '0.9.3', protocol: 22 });
+  const now = receiptId.make({ herdrVersion: '0.9.3', protocol: 22, served: { code_sha256: receiptId.sourceDigest() } });
   const results = { 'herdr.ping': { ok: true, at: '2026-10-13T10:00:00Z' } };
   const live = (identity, at) => rowOf(report({ receipts: { smoke: { identity, results: { 'herdr.ping': { ok: true, at } } } } }), 'herdr.ping').live;
   assert.equal(live(now, '2026-10-13T10:00:00Z'), 'PASS 2026-10-13');
@@ -205,7 +278,7 @@ test('proof matrix: a receipt counts only for this exact source and Herdr build;
   // editing the code the receipt vouched for changes the identity
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hp-id-'));
   try {
-    for (const f of receiptId.FILES) { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), 'a'); }
+    for (const f of ['server.js', 'lib/actions.js']) { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), 'a'); }
     const before = receiptId.sourceDigest(root); fs.appendFileSync(path.join(root, 'lib/actions.js'), 'b');
     assert.notEqual(receiptId.sourceDigest(root), before);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -247,6 +320,7 @@ test('gen-proof-matrix --check writes nothing; a plain run writes the document',
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hp-gen-'));
   try {
     for (const d of ['lib', 'scripts']) fs.cpSync(path.join(ROOT, d), path.join(root, d), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'server.js'), path.join(root, 'server.js')); // part of the receipt code digest
     fs.mkdirSync(path.join(root, 'docs', 'official'), { recursive: true });
     for (const f of ['cli-reference', 'socket-api', 'agent-automation']) fs.writeFileSync(path.join(root, 'docs', 'official', f + '.mdx'), '');
     fs.writeFileSync(path.join(root, 'docs', 'proof-matrix.md'), 'PLANTED\n');
@@ -335,14 +409,135 @@ test('portalctl install on a fresh instance writes the LaunchAgents and starts t
   assert.equal(k2.calls().filter((l) => l.startsWith('bootstrap ')).length, 1);
 });
 
-test('portalctl install over an already loaded label is allowed even though that job holds the port', async (t) => {
-  const kit = installKit(); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const occupant = net.createServer(); await new Promise((r) => occupant.listen(port, '127.0.0.1', r)); t.after(() => occupant.close());
-  fs.writeFileSync(kit.loaded, '');
-  const r = await runAsync(['bin/portalctl', 'install'], kit.env({ HERDR_PORTAL_PORT: String(port) }));
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(kit.calls().some((l) => l.startsWith('kickstart ')), 'the loaded job was kickstarted');
+// A launchctl that keeps state the way launchd does for these calls: bootstrap loads the plist and starts its program
+// (here a small fake portal) with the plist's EnvironmentVariables; kickstart restarts nothing new; bootout stops it.
+// FAKE_LC=bootout_fails|bootstrap_fails|no_start|stuck injects one failure.
+function statefulLaunchctl(kit) {
+  const st = path.join(kit.dir, 'lc-state.json');
+  const portal = path.join(kit.dir, 'fake-portal.js');
+  fs.writeFileSync(portal, `const http = require('http'); const fs = require('fs'); const crypto = require('crypto');
+const build = { instance_id: crypto.randomBytes(16).toString('hex'), started_at: new Date().toISOString(), flags: { strict_version: process.env.HERDR_PORTAL_STRICT_VERSION === '1', agent_decision: process.env.HERDR_PORTAL_ENABLE_AGENT_DECISION === '1' } };
+const tok = () => fs.readFileSync(process.env.HERDR_PORTAL_STATE_DIR + '/secrets/portal-token', 'utf8').trim();
+http.createServer((q, r) => { if (q.headers.authorization === 'Bearer ' + tok()) fs.appendFileSync(${JSON.stringify(path.join(kit.dir, 'token-hits'))}, '1\\n'); const ok = q.url === '/api/health' && q.headers.authorization === 'Bearer ' + tok(); r.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(ok ? { ok: true, build } : { ok: false })); })
+  .listen(Number(process.env.HERDR_PORTAL_PORT), '127.0.0.1');
+process.on('SIGTERM', () => process.exit(0));
+`);
+  const lc = path.join(kit.dir, 'bin', 'launchctl');
+  fs.writeFileSync(lc, `#!${process.execPath}
+const fs = require('fs'); const { spawn } = require('child_process');
+const [cmd, ...a] = process.argv.slice(2); const mode = process.env.FAKE_LC || '';
+fs.appendFileSync(${JSON.stringify(kit.log)}, [cmd, ...a].join(' ') + '\\n');
+const st = fs.existsSync(${JSON.stringify(st)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(st)}, 'utf8')) : {};
+const save = () => fs.writeFileSync(${JSON.stringify(st)}, JSON.stringify(st));
+const label = (x) => x.split('/').pop().replace(/\\.plist$/, '');
+if (cmd === 'print') process.exit(st[label(a[0])] ? 0 : 113);
+if (cmd === 'enable' || cmd === 'kickstart') process.exit(0);
+if (cmd === 'bootout') {
+  if (mode === 'bootout_fails') { process.stderr.write('Boot-out failed: 5: Input/output error'); process.exit(5); }
+  const j = st[label(a[0])]; if (j && j.pid) { try { process.kill(j.pid, 'SIGTERM'); } catch {} }
+  if (mode !== 'stuck') delete st[label(a[0])]; else st[label(a[0])].pid = null;
+  save(); process.exit(0);
+}
+if (cmd === 'bootstrap') {
+  if (mode === 'bootstrap_fails') { process.stderr.write('Bootstrap failed: 5: Input/output error'); process.exit(5); }
+  const xml = fs.readFileSync(a[1], 'utf8'); const env = {};
+  for (const m of xml.split('<key>EnvironmentVariables</key>')[1].split('</dict>')[0].matchAll(/<key>([^<]+)<\\/key><string>([^<]*)<\\/string>/g)) env[m[1]] = m[2];
+  let pid = null;
+  if (label(a[1]).endsWith('.tunnel') || mode === 'no_start') pid = null;
+  else { const c = spawn(process.execPath, [${JSON.stringify(portal)}], { env, detached: true, stdio: 'ignore' }); c.unref(); pid = c.pid; fs.appendFileSync(${JSON.stringify(st + '.pids')}, pid + '\\n'); }
+  st[label(a[1])] = { pid }; save(); process.exit(0);
+}
+process.exit(1);
+`, { mode: 0o755 });
+  const health = async (env) => {
+    const t = fs.readFileSync(path.join(kit.dir, 'st', 'secrets', 'portal-token'), 'utf8').trim();
+    for (let i = 0; i < 40; i++) {
+      const r = await fetch(`http://127.0.0.1:${env.HERDR_PORTAL_PORT}/api/health`, { headers: { Authorization: 'Bearer ' + t } }).catch(() => null);
+      if (r && r.status === 200) return (await r.json()).build;
+      await new Promise((ok) => setTimeout(ok, 250));
+    }
+    return null;
+  };
+  const kill = () => { for (const pid of (fs.existsSync(st + '.pids') ? fs.readFileSync(st + '.pids', 'utf8') : '').split('\n').filter(Boolean)) try { process.kill(Number(pid), 'SIGTERM'); } catch { /* already gone */ } };
+  const hits = () => { const f = path.join(kit.dir, 'token-hits'); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0; };
+  return { launchctl: lc, health, kill, hits, plist: path.join(kit.home, 'Library', 'LaunchAgents', 'dev.herdr-portal.plist') };
+}
+
+test('portalctl install over a loaded portal boots it out, waits, bootstraps the new definition and proves a new instance with the new flags', async (t) => {
+  const kit = installKit(); const f = statefulLaunchctl(kit);
+  t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true })); // stop the fake portals before their state is removed
+  const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
+  const first = await runAsync(['bin/portalctl', 'install'], env);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const old = await f.health(env); assert.equal(old.flags.strict_version, false);
+  fs.writeFileSync(kit.log, '');
+  const again = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_STRICT_VERSION: '1' });
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  const now = await f.health(env);
+  assert.notEqual(now.instance_id, old.instance_id, 'a new process answers');
+  assert.equal(now.flags.strict_version, true, 'the strict flag the reinstall set is in effect');
+  const calls = kit.calls(); const portalCalls = calls.filter((l) => /dev\.herdr-portal(\.plist)?$/.test(l));
+  assert.deepEqual(portalCalls.map((l) => l.split(' ')[0]), ['bootout', 'enable', 'bootstrap'], calls.join('\n'));
+  assert.ok(!calls.some((l) => l.startsWith('kickstart')), 'kickstart would keep the old definition');
+  assert.match(again.stdout, /portal booted out \(was loaded\)/); assert.match(again.stdout, /portal new instance [0-9a-f]{8} started .*"strict_version":true/);
+  const tok = fs.readFileSync(path.join(kit.dir, 'st', 'secrets', 'portal-token'), 'utf8').trim();
+  assert.ok(!(again.stdout + again.stderr).includes(tok), 'the token is never printed');
+  const revoke = await runAsync(['bin/portalctl', 'install'], env);
+  assert.equal(revoke.status, 0, revoke.stdout + revoke.stderr);
+  const after = await f.health(env);
+  assert.notEqual(after.instance_id, now.instance_id); assert.equal(after.flags.strict_version, false, 'a reinstall without the flag revokes it in the running portal');
+});
+
+test('portalctl reinstall never sends the token to a listener that is not owned by this user, and fails instead of claiming proof', async (t) => {
+  const kit = installKit(); const f = statefulLaunchctl(kit);
+  t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
+  const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  for (const [name, body] of [['lsof-other', 'printf "p99\\nu0\\n"'], ['lsof-unreadable', 'exit 1']]) {
+    const sent = f.hits();
+    const r = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_LSOF: kit.sh(name, body) });
+    assert.equal(f.hits(), sent, name + ': the token reached a listener that was not proven to be ours');
+    assert.equal(r.status, 1, name + ': ' + r.stdout + r.stderr);
+    assert.match(r.stderr, /no new portal instance answered/, name);
+    assert.match(r.stdout + r.stderr, /not owned by this user|could not confirm/, name);
+  }
+  const sent = f.hits();
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  assert.ok(f.hits() > sent, 'control: a listener owned by this user does receive the token, so the counter works');
+});
+
+test('portalctl reinstall reports why the last health check failed, not an ownership refusal from an earlier poll', async (t) => {
+  const kit = installKit(); const f = statefulLaunchctl(kit);
+  t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
+  const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  // the second lsof call (the first poll after bootstrap) cannot read the port; every later one sees this user
+  const n = path.join(kit.dir, 'lsof-n');
+  const lsof = kit.sh('lsof-once', `n=$(cat '${n}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '${n}'; [ $n -eq 2 ] && exit 1; printf "p1\\nu${process.getuid()}\\n"`);
+  const r = await runAsync(['bin/portalctl', 'install'], { ...env, FAKE_LC: 'no_start', HERDR_PORTAL_LSOF: lsof });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /no new portal instance answered/);
+  assert.doesNotMatch(r.stderr, /did not send the token/, 'the last poll did send the token');
+});
+
+test('portalctl reinstall failures are nonzero and say what state the service is in', async (t) => {
+  const kit = installKit(); const f = statefulLaunchctl(kit);
+  t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true })); // stop the fake portals before their state is removed
+  const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  const plistBefore = fs.readFileSync(f.plist, 'utf8');
+  const out = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_STRICT_VERSION: '1', FAKE_LC: 'bootout_fails' });
+  assert.equal(out.status, 1); assert.match(out.stderr, /bootout portal failed .*still loaded and its plist was not rewritten/);
+  assert.equal(fs.readFileSync(f.plist, 'utf8'), plistBefore, 'the plist is untouched when the old job could not be removed');
+  const stuck = await runAsync(['bin/portalctl', 'install'], { ...env, FAKE_LC: 'stuck' });
+  assert.equal(stuck.status, 1); assert.match(stuck.stderr, /portal is still loaded 10 s after bootout; its plist was not rewritten/);
+  fs.rmSync(path.join(kit.dir, 'lc-state.json'));
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  const boot = await runAsync(['bin/portalctl', 'install'], { ...env, FAKE_LC: 'bootstrap_fails' });
+  assert.equal(boot.status, 1); assert.match(boot.stderr, /bootstrap portal failed.*portal is not running \(the old job was booted out\)/);
+  assert.equal((await runAsync(['bin/portalctl', 'install'], env)).status, 0);
+  const none = await runAsync(['bin/portalctl', 'install'], { ...env, FAKE_LC: 'no_start' });
+  assert.equal(none.status, 1); assert.match(none.stderr, /no new portal instance answered \/api\/health within 10 s.*; the new definition is not proven in effect/);
 });
 
 test('lib/compat: a schema variant the reader does not know is skipped, so only actions that use it are refused', () => {

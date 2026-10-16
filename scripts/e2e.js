@@ -63,7 +63,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const ping = await call('GET', '/api/herdr/ping');
   step('herdr.ping', ping.status === 200, { sessions: ping.json && ping.json.sessions });
   const hl = await call('GET', '/api/health');
-  rec.identity = receipt.make({ herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: ping.json && ping.json.sessions && ping.json.sessions[0] && ping.json.sessions[0].protocol });
+  rec.identity = receipt.make({ served: hl.json && hl.json.build, herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: ping.json && ping.json.sessions && ping.json.sessions[0] && ping.json.sessions[0].protocol });
   step('health reports portal/tunnel/herdr/data', hl.status === 200, { health: hl.json && { portal: hl.json.portal, tunnel: { up: hl.json.tunnel.up, probe: hl.json.tunnel.probe }, herdr: hl.json.herdr, data: hl.json.data } });
   const lat = []; for (let i = 0; i < 10; i++) lat.push((await call('GET', '/api/inventory')).ms);
   step('measured latency of 10 inventory reads (ms)', true, { latencies_ms: lat, median: lat.slice().sort((a, b) => a - b)[5] });

@@ -52,6 +52,19 @@ test('routing rejects unknown actions, wrong verbs and unknown params before any
   assert.equal(c.herdr.writes().length, 0);
 });
 
+test('pane_read with expect_terminal_id refuses a changed terminal before reading; the check and the read are not atomic', async (t) => {
+  const c = await setup(t);
+  const reads = () => c.herdr.calls.filter((x) => x.method === 'pane.read').length;
+  const ok = await req(c.port, 'GET', '/api/herdr/pane_read?session=default&pane_id=w1:p1&expect_terminal_id=term_aa01');
+  assert.equal(ok.status, 200); assert.equal(ok.json.checked_terminal_id, 'term_aa01');
+  assert.equal(reads(), 1);
+  const bad = await req(c.port, 'GET', '/api/herdr/pane_read?session=default&pane_id=w1:p1&expect_terminal_id=term_ff99');
+  assert.equal(bad.status, 409); assert.equal(bad.json.error.code, 'target_changed');
+  assert.equal(reads(), 1, 'no pane.read after a terminal mismatch');
+  const plain = await req(c.port, 'GET', '/api/herdr/pane_read?session=default&pane_id=w1:p1');
+  assert.equal(plain.status, 200); assert.equal(plain.json.checked_terminal_id, undefined, 'without the parameter nothing is claimed');
+});
+
 test('pane_read only allows visible and detection', async (t) => {
   const c = await setup(t);
   const ok = await req(c.port, 'GET', '/api/herdr/pane_read?session=default&pane_id=w1:p1');
@@ -180,7 +193,23 @@ test('crash between "maybe sent" and "result recorded" is finalized as needs_rev
   const r = await req(c.port, 'POST', '/api/herdr/pane_send_text', { body });
   assert.equal(r.json.status, 'needs_review'); assert.equal(r.json.replayed, true);
   assert.match(JSON.stringify(r.json.detail), /portal_restarted/);
+  assert.equal(r.json.finished_at, null, 'the outcome time is unknown, so none is invented');
+  assert.ok(!Number.isNaN(Date.parse(r.json.recovered_at)));
   assert.equal(c.herdr.writes().length, 0);
+});
+
+test('a pane write records kind, intent and owed audit in the ledger and acknowledges its audit line; a replay owes none', async (t) => {
+  const c = await setup(t);
+  const body = wb({ text: 'hi', idempotency_key: 'idem-owed-ack-000000001' });
+  const w = await req(c.port, 'POST', '/api/herdr/pane_send_text', { body });
+  assert.equal(w.status, 200); assert.match(w.json.intent_id, /^[0-9a-f-]{36}$/);
+  await req(c.port, 'POST', '/api/herdr/pane_send_text', { body: { ...body, request_id: 'req-replay-0000000001' } });
+  const rows = fs.readFileSync(path.join(c.dir, 'state', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => [r.t, r.kind || null, r.audit || null, r.intent_id === w.json.intent_id]), [['pending', 'pane', 'owed', true], ['done', 'pane', 'owed', true], ['audited', null, null, true]]);
+  const entries = (await req(c.port, 'GET', '/api/herdr/audit_tail?n=10')).json.entries.filter((e) => e.action === 'herdr.pane_send_text');
+  assert.deepEqual(entries.map((e) => [e.replayed, e.intent_id]), [[false, w.json.intent_id], [true, null]]);
+  await c.restart();
+  assert.equal((await req(c.port, 'GET', '/api/herdr/audit_tail?n=10')).json.entries.filter((e) => e.action === 'herdr.pane_send_text').length, 2, 'nothing owed, nothing reconciled');
 });
 
 test('writes are refused when the installed CLI and the running server are different builds; reads keep working', async (t) => {
@@ -591,7 +620,7 @@ test('every write re-checks its target session after taking the pane lock: wrong
   c.herdr.state.errorOn = {};
   assert.equal((await send()).status, 200, 'the same request goes through once the target is compatible');
   assert.equal(c.herdr.writes().length, 1);
-  assert.equal(fs.readFileSync(path.join(c.dir, 'state', 'ledger.jsonl'), 'utf8').trim().split('\n').length, 2, 'only the one sent request was recorded (pending + result)');
+  assert.deepEqual(fs.readFileSync(path.join(c.dir, 'state', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l).t), ['pending', 'done', 'audited'], 'only the one sent request was recorded (pending + result + its audit ack)');
 });
 
 test('a write that queued behind another on the same pane sees a compatibility change made in between', async (t) => {
@@ -753,4 +782,56 @@ test('the gate also covers agent_decision (its own method and the pane calls it 
   const pr = await req(c.port, 'POST', '/api/herdr/agent_prompt', { body: wb({ pane_id: 'w1:p2', expect_terminal_id: 'term_aa02', text: 'hello' }) });
   assert.equal(pr.json.error.code, 'contract_mismatch'); assert.match(pr.json.error.message, /agent\.prompt now requires: wait/);
   assert.equal(c.herdr.writes().length, 0);
+});
+
+// The client's read guard is a pure function inside the browser IIFE; the test evaluates exactly that source span.
+const readGuard = () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  const span = src.slice(src.indexOf('// read-guard:start'), src.indexOf('// read-guard:end'));
+  assert.ok(span.includes('function readVerdict'), 'guard markers present');
+  return new Function(span + '\nreturn readVerdict;')();
+};
+
+test('client pane read: only the latest request for the still-selected session, pane and terminal is shown', () => {
+  const verdict = readGuard();
+  const want = { gen: 3, session: 'default', pane_id: 'w1:p1', terminal_id: 'term_aa01' };
+  const now = { gen: 3, sel: { session: 'default', pane_id: 'w1:p1' } };
+  const body = { ok: true, session: 'default', checked_terminal_id: 'term_aa01', result: { read: { pane_id: 'w1:p1', text: 'x' } } };
+  assert.equal(verdict(want, now, body), 'show');
+  assert.equal(verdict(want, { ...now, gen: 4 }, body), 'drop', 'a newer read was started');
+  assert.equal(verdict(want, { ...now, sel: { session: 'other', pane_id: 'w1:p1' } }, body), 'drop', 'same pane id in another session');
+  assert.equal(verdict(want, { ...now, sel: { session: 'default', pane_id: 'w1:p2' } }, body), 'drop', 'another pane selected');
+  assert.equal(verdict(want, { ...now, sel: null }, body), 'drop');
+  assert.equal(verdict(want, now, { ...body, session: 'other' }), 'mismatch', 'echoed session differs');
+  assert.equal(verdict(want, now, { ...body, result: { read: { pane_id: 'w1:p9', text: 'x' } } }), 'mismatch', 'echoed pane differs');
+  assert.equal(verdict(want, now, { ...body, result: { read: { text: 'x' } } }), 'mismatch', 'no echoed pane');
+  assert.equal(verdict(want, now, { ...body, checked_terminal_id: undefined }), 'mismatch', 'terminal precheck not confirmed');
+  assert.equal(verdict(want, now, { ok: false, error: { code: 'target_changed' } }), 'error');
+});
+
+test('health build identity: code and served static checksums, a fresh instance per start, allowlisted flags, no paths', async (t) => {
+  const c = await setup(t);
+  const b = (await req(c.port, 'GET', '/api/health')).json.build;
+  const { sourceDigest } = require('../scripts/receipt-identity');
+  assert.equal(b.code_sha256, sourceDigest(ROOT));
+  const statics = crypto.createHash('sha256');
+  for (const f of ['app.js', 'index.html', 'style.css']) statics.update(f + '\0').update(fs.readFileSync(path.join(ROOT, 'public', f))).update('\0');
+  assert.equal(b.static_sha256, statics.digest('hex'));
+  assert.match(b.instance_id, /^[0-9a-f]{32}$/); assert.ok(!Number.isNaN(Date.parse(b.started_at)));
+  assert.deepEqual(b.flags, { strict_version: false, agent_decision: false });
+  assert.ok(!JSON.stringify(b).includes(ROOT) && !JSON.stringify(b).includes(c.dir));
+  await c.restart();
+  const b2 = (await req(c.port, 'GET', '/api/health')).json.build;
+  assert.notEqual(b2.instance_id, b.instance_id); assert.equal(b2.code_sha256, b.code_sha256);
+});
+
+test('a reconciled pane audit line carries what the caller was told: the error code and HTTP status of the recorded outcome', () => {
+  const { reconciledAudit } = require('../lib/actions');
+  const row = { t: 'done', kind: 'pane', intent_id: 'i-1', audit: 'owed', action: 'herdr.pane_send_text', session: 'default', target: { pane_id: 'w1:p1' }, status: 'failed', detail: { error: 'pane_not_found', message: 'x' }, request_id: 'r', idempotency_key: 'k' };
+  const a = reconciledAudit(row);
+  assert.deepEqual([a.result, a.error_code, a.http_status, a.reconciled], ['failed', 'pane_not_found', 422, true]);
+  const uncertain = reconciledAudit({ ...row, status: 'needs_review', detail: { error: 'timeout' } });
+  assert.deepEqual([uncertain.error_code, uncertain.http_status], ['timeout', 502], 'a timeout is not reported as a restart');
+  const recovered = reconciledAudit({ ...row, status: 'needs_review', recovered_at: 'now', finished_at: null, detail: { reason: 'portal_restarted_before_result_recorded' } });
+  assert.deepEqual([recovered.error_code, recovered.http_status, recovered.recovered], ['portal_restarted_before_result_recorded', null, true]);
 });

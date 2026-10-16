@@ -48,7 +48,7 @@ const block = (t) => { const l = lines(t); let i = l.length - 1; for (; i >= 0 &
 (async () => {
   const OPT = 'Yes';
   const hl = await call('GET', '/api/health'); const pg = await call('GET', '/api/herdr/ping');
-  out.identity = receipt.make({ herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: pg.json && pg.json.sessions && pg.json.sessions[0] && pg.json.sessions[0].protocol });
+  out.identity = receipt.make({ served: hl.json && hl.json.build, herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: pg.json && pg.json.sessions && pg.json.sessions[0] && pg.json.sessions[0].protocol });
 
   // ---- 1. live: the refuse list, on a real `rm` permission dialog ----
   const rPane = args['refuse-pane']; const rTerm = args['refuse-term'];

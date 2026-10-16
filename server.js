@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const { config, ensureDirs, PINNED_HERDR_VERSION } = require('./lib/config');
 const compat = require('./lib/compat');
-const { ACTIONS } = require('./lib/actions');
+const { ACTIONS, reconciledAudit } = require('./lib/actions');
 const { loadTokenDigest } = require('./lib/security');
 const { Ledger } = require('./lib/ledger');
 const { Audit } = require('./lib/audit');
@@ -30,9 +30,10 @@ function tunnelProbe() {
   const tokenDigest = loadTokenDigest();
   const ledger = new Ledger(config.ledgerFile);
   const audit = new Audit(config.auditFile);
-  for (const r of ledger.recovered) { // a crash between "maybe sent" and "result recorded" must still show up in the audit log
-    try { audit.append({ timestamp: new Date().toISOString(), action: r.action, session: r.session || null, pane: (r.target && r.target.pane_id) || null, option: null, result: 'needs_review', http_status: null, error_code: 'portal_restarted_before_result_recorded', category: null, replayed: false, request_id: r.request_id, idempotency_key: r.idempotency_key, recovered: true }); } catch { /* reported by audit.healthy */ }
-  }
+  // Owed audit lines (a crash or audit failure between an outcome and its audit line, or a half-done request finalized
+  // as needs_review) are written from the ledger rows; nothing is re-sent.
+  const reconciled = ledger.reconcile((row) => audit.append(reconciledAudit(row)));
+  if (reconciled || ledger.owed.length) log('audit_reconciled', { count: reconciled, still_owed: ledger.owed.length });
   if (ledger.recovered.length) log('ledger_recovered_needs_review', { count: ledger.recovered.length, keys: ledger.recovered.map((r) => r.idempotency_key) });
 
   const ctx = {
