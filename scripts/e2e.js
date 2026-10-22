@@ -14,7 +14,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, all) => (
 const base = (args.base || 'http://127.0.0.1:8787').replace(/\/$/, '');
 const token = fs.readFileSync(config.tokenFile, 'utf8').trim(); // honors HERDR_PORTAL_STATE_DIR, like the server
 const rec = { started_at: new Date().toISOString(), identity: null, steps: [] }; // the base address is not recorded
-const step = (name, ok, info = {}) => { rec.steps.push({ name, ok, at: new Date().toISOString(), ...info }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info.note ? '  — ' + info.note : ''}`); return ok; };
+const step = (name, ok, info = {}) => { rec.steps.push({ name, ok, at: new Date().toISOString(), ...info }); console.log(`${info.skipped ? 'SKIP' : ok ? 'PASS' : 'FAIL'}  ${name}${info.note ? '  — ' + info.note : ''}`); return ok; };
 
 async function call(method, p, { body, auth = true, tok } = {}) {
   const t0 = Date.now();
@@ -63,15 +63,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const ping = await call('GET', '/api/herdr/ping');
   step('herdr.ping', ping.status === 200, { sessions: ping.json && ping.json.sessions });
   const hl = await call('GET', '/api/health');
-  rec.identity = receipt.make({ herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: ping.json && ping.json.sessions && ping.json.sessions[0] && ping.json.sessions[0].protocol });
+  rec.identity = receipt.make({ served: hl.json && hl.json.build, herdrVersion: hl.json && hl.json.herdr && hl.json.herdr.installed_version, protocol: ping.json && ping.json.sessions && ping.json.sessions[0] && ping.json.sessions[0].protocol });
   step('health reports portal/tunnel/herdr/data', hl.status === 200, { health: hl.json && { portal: hl.json.portal, tunnel: { up: hl.json.tunnel.up, probe: hl.json.tunnel.probe }, herdr: hl.json.herdr, data: hl.json.data } });
   const lat = []; for (let i = 0; i < 10; i++) lat.push((await call('GET', '/api/inventory')).ms);
   step('measured latency of 10 inventory reads (ms)', true, { latencies_ms: lat, median: lat.slice().sort((a, b) => a - b)[5] });
 
   // --- forbidden things, against the real Herdr ---
   const firstPane = inv.json.sessions[0].workspaces[0].tabs.find((t) => t.panes.length).panes[0];
-  const rec1 = await call('GET', `/api/herdr/pane_read?session=default&pane_id=${firstPane.pane_id}&source=recent`);
-  step('pane_read source=recent refused', rec1.status === 400, { status: rec1.status });
+  // A history read of a recognized agent pages that agent (active), so this read-only proof asks for one only to see it refused.
+  const historyOn = !!(hl.json && hl.json.capabilities && hl.json.capabilities.history);
+  if (historyOn) step('pane_read source=recent refusal not probed: history is enabled and a read would page a live agent', true, { skipped: true, note: 'skipped on purpose', capabilities: hl.json.capabilities });
+  else {
+    const rec1 = await call('GET', `/api/herdr/pane_read?session=default&pane_id=${firstPane.pane_id}&source=recent`);
+    step('pane_read source=recent refused while history is off (403 source_disabled)', rec1.status === 403 && rec1.json.error.code === 'source_disabled', { status: rec1.status });
+  }
   const rec2 = await call('GET', `/api/herdr/pane_read?session=default&pane_id=${firstPane.pane_id}&source=recent-unwrapped`);
   step('pane_read source=recent-unwrapped refused', rec2.status === 400, { status: rec2.status });
   const bad = await call('GET', '/api/herdr/server_stop');

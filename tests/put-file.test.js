@@ -36,7 +36,7 @@ test('the drop root is created with mode 0700 and a written file is 0600 with th
   const content = 'héllo wörld ✓ 日本語\n';
   const r = await put(c, body(content, { action: 'put_file', sha256: sha(Buffer.from(content)).toUpperCase() }));
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.deepEqual(Object.keys(r.json).sort(), ['bytes', 'mode_used', 'ok', 'path', 'sha256']);
+  assert.deepEqual(Object.keys(r.json).sort(), ['bytes', 'intent_id', 'mode_used', 'ok', 'path', 'sha256']);
   const file = path.join(real(inbox(c)), 'a.txt');
   assert.equal(r.json.path, file); assert.equal(r.json.mode_used, 'create'); assert.equal(r.json.ok, true);
   const disk = fs.readFileSync(file);
@@ -377,7 +377,31 @@ test('the response reports what is on disk even if it differs from the request (
   const s = scratch(t);
   // tamper with the published file between the publish and the read-back by replacing it in beforeCommit's aftermath: a hook
   // that swaps the temp file's content makes the result differ from the received bytes, and the call must say so.
-  await assert.rejects(putFile(s.root, pf('what was sent'), { beforeCommit: async ({ tmp }) => fs.writeFileSync(tmp, 'what is on disk') }), (e) => e.code === 'readback_mismatch' && e.status === 500);
+  await assert.rejects(putFile(s.root, pf('what was sent'), { beforeCommit: async ({ tmp }) => fs.writeFileSync(tmp, 'what is on disk') }), (e) => e.code === 'committed_unverified' && e.status === 500 && e.extra.reason === 'readback_mismatch');
+});
+
+const committedUnverified = (reason) => (e) => {
+  assert.equal(e.status, 500); assert.equal(e.code, 'committed_unverified');
+  assert.deepEqual({ committed: e.extra.committed, verified: e.extra.verified, retryable: e.extra.retryable, reason: e.extra.reason }, { committed: true, verified: false, retryable: false, reason });
+  assert.match(e.extra.sha256, /^[0-9a-f]{64}$/); assert.ok(e.extra.path.endsWith('.txt'));
+  return true;
+};
+
+test('a failure after the publish keeps the new bytes and says committed_unverified, never a plain error', async (t) => {
+  const s = scratch(t);
+  fs.writeFileSync(path.join(s.root, 'f.txt'), 'original');
+  await assert.rejects(putFile(s.root, pf('new bytes', { mode: 'overwrite' }), { afterPublish: async () => { throw Object.assign(new Error('disk gone'), { code: 'EIO' }); } }), committedUnverified('write_failed'));
+  assert.equal(fs.readFileSync(path.join(s.root, 'f.txt'), 'utf8'), 'new bytes', 'the committed file is not rolled back');
+  await assert.rejects(putFile(s.root, pf('created', { path: 'c.txt' }), { afterPublish: async () => { throw Object.assign(new Error('x'), { code: 'EIO' }); } }), committedUnverified('write_failed'));
+  assert.equal(fs.readFileSync(path.join(s.root, 'c.txt'), 'utf8'), 'created');
+});
+
+test('a failure before the publish leaves the original file and is not reported as committed', async (t) => {
+  const s = scratch(t);
+  fs.writeFileSync(path.join(s.root, 'f.txt'), 'original');
+  await assert.rejects(putFile(s.root, pf('new bytes', { mode: 'overwrite' }), { beforeCommit: async () => { throw Object.assign(new Error('x'), { code: 'EIO' }); } }), (e) => e.code === 'write_failed' && !(e.extra && e.extra.committed));
+  assert.equal(fs.readFileSync(path.join(s.root, 'f.txt'), 'utf8'), 'original');
+  assert.deepEqual(fs.readdirSync(s.root), ['f.txt'], 'no temp file left');
 });
 
 // ---------------- fixes after the independent review ----------------
@@ -471,9 +495,9 @@ function fsp() { return fs.promises; }
 test('the read-back refuses a file that was swapped for a symlink after the publish, and one that is not mode 0600', async (t) => {
   const s = scratch(t);
   const outside = path.join(s.d, 'outside.txt'); fs.writeFileSync(outside, 'not ours');
-  await assert.rejects(putFile(s.root, pf('mine'), { afterPublish: async ({ final }) => { fs.rmSync(final); fs.symlinkSync(outside, final); } }), (e) => e.code === 'symlink_refused');
+  await assert.rejects(putFile(s.root, pf('mine'), { afterPublish: async ({ final }) => { fs.rmSync(final); fs.symlinkSync(outside, final); } }), committedUnverified('symlink_refused'));
   assert.equal(fs.readFileSync(outside, 'utf8'), 'not ours');
-  await assert.rejects(putFile(s.root, pf('mine', { path: 'g.txt' }), { beforeCommit: async ({ tmp }) => fs.chmodSync(tmp, 0o644) }), (e) => e.code === 'readback_failed');
+  await assert.rejects(putFile(s.root, pf('mine', { path: 'g.txt' }), { beforeCommit: async ({ tmp }) => fs.chmodSync(tmp, 0o644) }), committedUnverified('readback_failed'));
 });
 
 test('the temp file is created exclusively: an existing file at the temp name is neither used nor removed', async (t) => {
@@ -491,4 +515,144 @@ test('a destination that is not a regular file (a FIFO) is refused', async (t) =
   execFileSync('mkfifo', [path.join(s.root, 'pipe')]);
   for (const m of ['create', 'overwrite']) await assert.rejects(putFile(s.root, pf('x', { path: 'pipe', mode: m })), (e) => e.code === 'not_regular_file' && e.status === 409);
   assert.ok(fs.statSync(path.join(s.root, 'pipe')).isFIFO());
+});
+
+test('the audit line of a committed but unverified write says so, with the path and hash of the bytes written', () => {
+  const { ACTIONS } = require('../lib/actions');
+  const { ApiError } = require('../lib/validate');
+  const err = Object.assign(new ApiError(500, 'committed_unverified', 'x', { committed: true }), { info: { path: '/d/f.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  const line = ACTIONS['herdr.put_file'].audit({}, { path: 'f.txt', mode: 'overwrite' }, null, err);
+  assert.equal(line.result, 'committed_unverified'); assert.equal(line.error_code, 'committed_unverified');
+  assert.equal(line.path, '/d/f.txt'); assert.equal(line.sha256, 'a'.repeat(64)); assert.equal(line.http_status, 500);
+});
+
+// ---------------- ledger intent/outcome and the owed audit line (dispatch and HTTP in this process) ----------------
+// Fresh lib modules bound to a scratch drop root; ledger and audit files are explicit. boot() is what server.js does
+// at start: open both, then write the owed audit lines from the ledger.
+function inproc(t) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'hp-p4-')); const drop = path.join(d, 'inbox'); fs.mkdirSync(drop, { mode: 0o700 });
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const prev = process.env.HERDR_PORTAL_DROP_DIR; process.env.HERDR_PORTAL_DROP_DIR = drop;
+  for (const k of Object.keys(require.cache)) if (k.startsWith(path.join(ROOT, 'lib') + path.sep)) delete require.cache[k];
+  try {
+    const { dispatch, reconciledAudit } = require('../lib/actions');
+    const { Ledger } = require('../lib/ledger'); const { Audit } = require('../lib/audit'); const { createServer } = require('../lib/server');
+    const files = { ledger: path.join(d, 'ledger.jsonl'), audit: path.join(d, 'audit.jsonl') };
+    const lines = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+    const boot = () => { const ledger = new Ledger(files.ledger); const audit = new Audit(files.audit); ledger.reconcile((row) => audit.append(reconciledAudit(row))); return { ledger, audit }; };
+    return { d, drop: fs.realpathSync(drop), files, dispatch, boot, Ledger, createServer, ledgerRows: () => lines(files.ledger), auditRows: () => lines(files.audit) };
+  } finally { if (prev === undefined) delete process.env.HERDR_PORTAL_DROP_DIR; else process.env.HERDR_PORTAL_DROP_DIR = prev; }
+}
+const failingAudit = () => ({ healthy: true, append() { throw new Error('EIO'); } });
+
+test('put_file: an intent row is durable before the first change, the outcome after, and the audit line is acknowledged', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  const b = await s.dispatch(ctx, 'herdr.put_file', 'POST', body('zq-content-marker', { path: 'sub/a.txt' }));
+  assert.equal(b.ok, true); assert.match(b.intent_id, /^[0-9a-f-]{36}$/);
+  const rows = s.ledgerRows();
+  assert.deepEqual(rows.map((r) => [r.t, r.kind || null, r.status || null]), [['pending', 'file', null], ['done', 'file', 'written'], ['audited', null, null]]);
+  assert.ok(rows.every((r) => r.intent_id === b.intent_id)); assert.equal(rows[0].audit, 'owed');
+  assert.ok(!fs.readFileSync(s.files.ledger, 'utf8').includes('zq-content-marker'), 'no content in the ledger');
+  const audit = s.auditRows(); assert.equal(audit.length, 1); assert.equal(audit[0].intent_id, b.intent_id); assert.equal(audit[0].result, 'written');
+  s.boot(); assert.equal(s.auditRows().length, 1, 'an acknowledged outcome is not audited again');
+});
+
+test('put_file: the ledger cannot record the intent -> 503 ledger_unavailable and nothing is created', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  ctx.ledger.begin = () => { throw new Error('ENOSPC'); };
+  await assert.rejects(s.dispatch(ctx, 'herdr.put_file', 'POST', body('x', { path: 'new/dir/a.txt' })), (e) => e.status === 503 && e.code === 'ledger_unavailable');
+  assert.deepEqual(ls(s.drop), [], 'not even the directory');
+  assert.equal(s.auditRows()[0].result, 'rejected');
+});
+
+test('put_file: an outcome that cannot be recorded after the publish is committed_unverified ledger_unrecorded, never a clean 200', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  ctx.ledger.finish = () => { throw new Error('EIO'); };
+  await assert.rejects(s.dispatch(ctx, 'herdr.put_file', 'POST', body('kept')), (e) => e.status === 500 && e.code === 'committed_unverified'
+    && e.extra.reason === 'ledger_unrecorded' && e.extra.committed === true && e.extra.verified === false && e.extra.retryable === false && /^[0-9a-f-]{36}$/.test(e.extra.intent_id)
+    && e.extra.observed_sha256 === sha(Buffer.from('kept')) && e.extra.observed_bytes === 4);
+  assert.equal(fs.readFileSync(path.join(s.drop, 'a.txt'), 'utf8'), 'kept');
+  const after = s.boot().ledger.recovered;
+  assert.equal(after.length, 1, 'the intent without an outcome is recovered at the next boot');
+  assert.deepEqual([after[0].status, after[0].finished_at, typeof after[0].recovered_at, after[0].detail.observed.exists], ['needs_review', null, 'string', true]);
+});
+
+test('put_file: an audit failure after a durable outcome answers audit "deferred"; the next boot writes it once, a second boot not again', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  ctx.audit = failingAudit();
+  const b = await s.dispatch(ctx, 'herdr.put_file', 'POST', body('later'));
+  assert.equal(b.ok, true); assert.equal(b.audit, 'deferred');
+  assert.equal(s.ledgerRows().filter((r) => r.t === 'audited').length, 0);
+  s.boot();
+  const a = s.auditRows(); assert.equal(a.length, 1);
+  assert.deepEqual([a[0].intent_id, a[0].result, a[0].reconciled, a[0].sha256], [b.intent_id, 'written', true, b.sha256]);
+  s.boot(); assert.equal(s.auditRows().length, 1);
+});
+
+test('crash windows: intent only -> needs_review with recovered_at and finished_at null, file untouched; audit-before-ack -> a duplicate line', async (t) => {
+  const s = inproc(t);
+  const file = path.join(s.drop, 'keep.txt'); fs.writeFileSync(file, 'original', { mode: 0o600 });
+  const before = fs.statSync(file);
+  const l = new s.Ledger(s.files.ledger);
+  l.begin({ kind: 'file', intent_id: '11111111-1111-4111-8111-111111111111', audit: 'owed', action: 'herdr.put_file', path: file, mode: 'overwrite', bytes: 3, sha256: 'a'.repeat(64), started_at: '2026-10-16T00:00:00.000Z' });
+  // crash after the audit line but before its ack: an outcome row whose audit line exists
+  l.finish({ kind: 'file', intent_id: '22222222-2222-4222-8222-222222222222', audit: 'owed', action: 'herdr.put_file', path: file, mode: 'overwrite', bytes: 8, sha256: 'b'.repeat(64), started_at: '2026-10-16T00:00:00.000Z', finished_at: '2026-10-16T00:00:01.000Z', status: 'written' });
+  fs.writeFileSync(s.files.audit, JSON.stringify({ action: 'herdr.put_file', result: 'written', intent_id: '22222222-2222-4222-8222-222222222222' }) + '\n', { mode: 0o600 });
+  const { ledger } = s.boot();
+  const rec = ledger.recovered[0];
+  assert.deepEqual([rec.status, rec.finished_at, typeof rec.recovered_at, rec.detail.observed], ['needs_review', null, 'string', { exists: true, regular_file: true, bytes: 8 }]);
+  const after = fs.statSync(file);
+  assert.deepEqual([after.ino, after.mtimeMs, fs.readFileSync(file, 'utf8')], [before.ino, before.mtimeMs, 'original'], 'recovery never writes the file');
+  const a = s.auditRows();
+  assert.deepEqual(a.map((e) => [e.intent_id.slice(0, 1), e.result]).sort(), [['1', 'needs_review'], ['2', 'written'], ['2', 'written']], 'at least once: the un-acked line is written again');
+  s.boot(); assert.equal(s.auditRows().length, 3);
+});
+
+test('legacy ledger rows (no audit field) are never reconciled into the audit log', async (t) => {
+  const s = inproc(t);
+  const legacy = { t: 'done', request_id: 'req-old-00000001', idempotency_key: 'idem-old-000000000001', payload_hash: 'h', action: 'herdr.pane_send_text', session: 'default', target: { pane_id: 'w1:p1' }, started_at: '2026-10-01T00:00:00.000Z', finished_at: '2026-10-01T00:00:01.000Z', status: 'input_sent', detail: {} };
+  fs.writeFileSync(s.files.ledger, JSON.stringify(legacy) + '\n', { mode: 0o600 });
+  const { ledger } = s.boot();
+  assert.deepEqual(s.auditRows(), []);
+  assert.equal(ledger.lookup(legacy.idempotency_key).record.finished_at, legacy.finished_at);
+  assert.equal(fs.readFileSync(s.files.ledger, 'utf8'), JSON.stringify(legacy) + '\n', 'history is not rewritten');
+});
+
+test('committed_unverified over dispatch and HTTP: body, ledger and audit agree on the intent; sha256 is requested, observed_sha256 is on disk', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  ctx.dropHooks = { afterPublish: ({ final }) => fs.writeFileSync(final, 'something else entirely') };
+  const server = s.createServer({ ctx, tokenDigest: crypto.createHash('sha256').update(TOKEN).digest(), log: () => {}, tunnelProbe: async () => ({ up: false }) });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise((r) => server.close(r)));
+  const r = await req(server.address().port, 'POST', '/api/herdr/put_file', { body: body('requested') });
+  assert.equal(r.status, 500, JSON.stringify(r.json));
+  const want = sha(Buffer.from('requested')); const disk = sha(Buffer.from('something else entirely'));
+  assert.deepEqual([r.json.error, r.json.reason, r.json.committed, r.json.verified, r.json.retryable, r.json.sha256, r.json.bytes, r.json.observed_sha256, r.json.observed_bytes],
+    ['committed_unverified', 'readback_mismatch', true, false, false, want, 9, disk, 23]);
+  const done = s.ledgerRows().find((x) => x.t === 'done');
+  const a = s.auditRows().at(-1);
+  assert.deepEqual([done.status, done.intent_id, a.result, a.intent_id, a.sha256, a.observed_sha256], ['committed_unverified', r.json.intent_id, 'committed_unverified', r.json.intent_id, want, disk]);
+  assert.ok(s.ledgerRows().some((x) => x.t === 'audited' && x.intent_id === r.json.intent_id));
+  ctx.audit = failingAudit();
+  const r2 = await req(server.address().port, 'POST', '/api/herdr/put_file', { body: body('requested', { path: 'b.txt' }) });
+  assert.deepEqual([r2.status, r2.json.error, r2.json.audit], [500, 'committed_unverified', 'deferred']);
+});
+
+test('put_file keeps working while Herdr is down', async (t) => {
+  const c = await setup(t);
+  await c.herdr.close();
+  const r = await put(c, body('no herdr needed', { path: 'down.txt' }));
+  assert.equal(r.status, 200, JSON.stringify(r.json)); assert.equal(r.json.bytes, 15);
+});
+
+test('a rejection after the intent tells the caller audit "deferred" and its intent_id, and nothing else from the error internals', async (t) => {
+  const s = inproc(t); const ctx = s.boot();
+  ctx.dropHooks = { beforeCommit: () => { const e = new Error('disk'); e.code = 'EIO'; throw e; } };
+  const server = s.createServer({ ctx, tokenDigest: crypto.createHash('sha256').update(TOKEN).digest(), log: () => {}, tunnelProbe: async () => ({ up: false }) });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise((r) => server.close(r)));
+  ctx.audit = failingAudit();
+  const r = await req(server.address().port, 'POST', '/api/herdr/put_file', { body: body('never published') });
+  assert.equal(r.status, 500, JSON.stringify(r.json));
+  assert.deepEqual(Object.keys(r.json).sort(), ['audit', 'detail', 'error', 'intent_id', 'ok']);
+  assert.deepEqual([r.json.error, r.json.audit], ['write_failed', 'deferred']); assert.match(r.json.intent_id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(ls(s.drop), [], 'nothing was published');
 });

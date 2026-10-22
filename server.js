@@ -3,13 +3,14 @@ const http = require('http');
 const fs = require('fs');
 const { config, ensureDirs, PINNED_HERDR_VERSION } = require('./lib/config');
 const compat = require('./lib/compat');
-const { ACTIONS } = require('./lib/actions');
+const { ACTIONS, reconciledAudit } = require('./lib/actions');
 const { loadTokenDigest } = require('./lib/security');
 const { Ledger } = require('./lib/ledger');
 const { Audit } = require('./lib/audit');
 const { Inventory } = require('./lib/inventory');
 const herdr = require('./lib/herdr');
 const { createServer } = require('./lib/server');
+const { HISTORY, CONTROL, AGENT_CLICK, capabilities } = require('./lib/gates');
 
 // Structured logs: event name + non-secret fields only.
 const log = (event, fields = {}) => process.stdout.write(JSON.stringify({ t: new Date().toISOString(), event, ...fields }) + '\n');
@@ -30,9 +31,10 @@ function tunnelProbe() {
   const tokenDigest = loadTokenDigest();
   const ledger = new Ledger(config.ledgerFile);
   const audit = new Audit(config.auditFile);
-  for (const r of ledger.recovered) { // a crash between "maybe sent" and "result recorded" must still show up in the audit log
-    try { audit.append({ timestamp: new Date().toISOString(), action: r.action, session: r.session || null, pane: (r.target && r.target.pane_id) || null, option: null, result: 'needs_review', http_status: null, error_code: 'portal_restarted_before_result_recorded', category: null, replayed: false, request_id: r.request_id, idempotency_key: r.idempotency_key, recovered: true }); } catch { /* reported by audit.healthy */ }
-  }
+  // Owed audit lines (a crash or audit failure between an outcome and its audit line, or a half-done request finalized
+  // as needs_review) are written from the ledger rows; nothing is re-sent.
+  const reconciled = ledger.reconcile((row) => audit.append(reconciledAudit(row)));
+  if (reconciled || ledger.owed.length) log('audit_reconciled', { count: reconciled, still_owed: ledger.owed.length });
   if (ledger.recovered.length) log('ledger_recovered_needs_review', { count: ledger.recovered.length, keys: ledger.recovered.map((r) => r.idempotency_key) });
 
   const ctx = {
@@ -61,7 +63,11 @@ function tunnelProbe() {
     } catch (e) { ctx.compat = null; ctx.cliError = e.code || 'schema_unreadable'; }
   })().finally(() => { reading = null; }));
   await ctx.refreshCompat(true);
-  log('boot', { version: config.version, herdr: ctx.herdrVersion, verified_version: PINNED_HERDR_VERSION, strict: ctx.strict, writes_enabled: ctx.writesEnabled });
+  const caps = capabilities();
+  for (const [name, key, accepted] of [[HISTORY, 'history', '1, agents or all'], [CONTROL, 'control', '1'], [AGENT_CLICK, 'agent_click', '1']]) {
+    if (caps[key] === 'invalid') log('gate_invalid', { name, value: String(process.env[name]).slice(0, 20), effect: `${key} is off; use ${accepted}` });
+  }
+  log('boot', { version: config.version, herdr: ctx.herdrVersion, verified_version: PINNED_HERDR_VERSION, strict: ctx.strict, writes_enabled: ctx.writesEnabled, capabilities: caps });
 
   await ctx.inventory.start();
   const server = createServer({ ctx, tokenDigest, log, tunnelProbe });
