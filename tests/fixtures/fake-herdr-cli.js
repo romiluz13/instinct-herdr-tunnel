@@ -6,7 +6,7 @@ const dir = process.env.FAKE_HERDR_DIR;
 const log = (o) => fs.appendFileSync(dir + '/cli-calls.jsonl', JSON.stringify(o) + '\n');
 const readOpt = (f) => { try { return fs.readFileSync(dir + '/' + f, 'utf8').trim(); } catch { return null; } };
 // version.txt lets a test "upgrade" the CLI while the portal runs; schema-patch.json lets it drift the schema.
-if (a[0] === '--version') { console.log('herdr ' + (readOpt('version.txt') || process.env.FAKE_HERDR_VERSION || '0.9.3')); process.exit(0); }
+if (a[0] === '--version') { console.log('herdr ' + (readOpt('version.txt') || process.env.FAKE_HERDR_VERSION || '0.9.5')); process.exit(0); }
 if (a[0] === 'api' && a[1] === 'schema') {
   if (readOpt('no-schema.txt')) { console.error(JSON.stringify({ error: { code: 'schema_unreadable', message: 'fake' } })); process.exit(1); }
   // Built from what the portal says it sends (every action's `forwards` plus the write preflight), so the fake CLI and
@@ -23,6 +23,47 @@ if (a[0] === 'api' && a[1] === 'schema') {
   const defs = {}; const oneOf = [];
   for (const [name, v] of Object.entries(m)) { const d = name.replace(/\W/g, '_') + 'Params'; defs[d] = { type: 'object', properties: Object.fromEntries([...v.props].map((f) => [f, {}])), required: [...v.required] }; oneOf.push({ properties: { method: { const: name }, params: { $ref: '#/schemas/request/$defs/' + d } } }); }
   console.log(JSON.stringify({ protocol: Number(readOpt('protocol.txt') || 22), schemas: { request: { oneOf, $defs: defs } } })); process.exit(0);
+}
+if (a.includes('terminal') && a.includes('control') && !a.includes('--help')) {
+  // `herdr [--session S] terminal session control TARGET --cols C --rows R`: behaviour comes from control-mode.json, what happened goes to control-calls.jsonl.
+  const cfg = JSON.parse(readOpt('control-mode.json') || '{}');
+  const mode = cfg.mode || 'ok';
+  const note = (o) => fs.appendFileSync(dir + '/control-calls.jsonl', JSON.stringify({ pid: process.pid, at: Date.now(), ...o }) + '\n');
+  const out = (o) => process.stdout.write((typeof o === 'string' ? o : JSON.stringify(o)) + '\n');
+  const closed = (reason) => out({ type: 'terminal.closed', reason });
+  note({ start: true, argv: a });
+  process.on('exit', () => note({ exit: true }));
+  process.on('SIGTERM', () => { note({ sigterm: true }); if (!cfg.ignoreTerm) process.exit(143); });
+  const done = (fn) => setTimeout(fn, cfg.holdMs || 0);
+  if (mode === 'busy') { closed(cfg.reason || 'terminal attach failed: terminal term_aa01 already has an attached client; retry with --takeover'); process.exit(0); }
+  if (mode === 'detached-no-frame') { closed('detached'); process.exit(0); }
+  if (mode === 'exit-now') process.exit(0);
+  if (mode === 'grandchild') { // a child that keeps the output pipe open after this process is killed
+    const g = require('child_process').spawn('/bin/sleep', ['25'], { stdio: ['ignore', 'inherit', 'inherit'] });
+    fs.writeFileSync(dir + '/grandchild.pid', String(g.pid)); g.unref();
+  }
+  setInterval(() => {}, 1000);
+  out({ type: 'terminal.frame', seq: 1, full: true, width: 64, height: 47, encoding: 'ansi', bytes: '' });
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (d) => {
+    buf += d; let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      let c; try { c = JSON.parse(line); } catch { continue; }
+      note({ command: c });
+      if (mode === 'early-exit') process.exit(1);
+      if (c.type !== 'terminal.release') continue;
+      if (mode === 'hang' || mode === 'grandchild') continue;
+      done(() => {
+        if (mode === 'malformed') out('this is not json');
+        if (mode === 'resize') fs.writeFileSync(dir + '/stty-size.txt', cfg.newSize || '30 100');
+        if (mode !== 'no-closed') closed('detached');
+        process.exit(0);
+      });
+    }
+  });
+  return;
 }
 if (a.includes('--help') || (a.length === 1 && a[0] === 'pane')) { if (readOpt('no-pane-run.txt') && a.includes('run')) process.exit(1); console.log('Usage: herdr ' + a.filter((x) => x !== '--help').join(' ')); process.exit(0); }
 if (a[0] === 'session' && a[1] === 'list') {

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/romiluz13/instinct-herdr-tunnel/security/advisories/new
+    about: Privately, through GitHub. Please do not open a public issue with exploit details.

@@ -31,8 +31,11 @@
   <div id="banner" class="banner" role="alert" hidden></div>
   <div class="layout">
     <nav id="tree" class="tree" aria-label="Sessions, workspaces and panes"></nav>
-    <section id="detail" class="detail" aria-live="polite">
-      <p class="muted">Select a pane to read it or send input.</p>
+    <section id="detail" class="detail" aria-label="Selected pane">
+      <p id="detail-empty" class="muted">Select a pane to read it or send input.</p>
+      <div id="pane-head"></div>
+      <div id="viewer" class="viewer" hidden></div>
+      <div id="pane-controls"></div>
     </section>
     <aside class="results">
       <h2>Results</h2>
@@ -41,6 +44,7 @@
     </aside>
   </div>
 </div>
+<script src="/viewer.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

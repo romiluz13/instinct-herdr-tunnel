@@ -6,3 +6,8 @@ docs/smoke-results.json
 docs/e2e-*.json
 *.log
 .DS_Store
+# assistant and scratch folders: planning notes, probe logs and local settings
+.claude/
+.scratch/
+.env
+.env.*

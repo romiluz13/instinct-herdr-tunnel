@@ -6,8 +6,8 @@
 // What the file is: evidence. It records (1) a static contract check (method exists in the installed schema, every field the
 // portal forwards is a schema field and every field the schema requires is forwarded, documentation headings exist), (2) the
 // date of a past live observation, accepted only when the receipt carries the identity of THIS source and Herdr build, and
-// (3) which actions the code switches off by default. It never enables or disables anything: the one runtime switch is
-// `proof.verified` in lib/actions.js.
+// (3) which actions the code switches off by default. It never enables or disables anything: the runtime switches are
+// `proof.verified` and `gate` in lib/actions.js.
 //
 // Privacy: the output is assembled from allowlisted fields only (action names, schema names, documentation URLs, versions,
 // a calendar date). Receipt notes, screens, pane ids, paths and addresses are never read into it, and a final scan refuses
@@ -86,22 +86,22 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVers
           + (fwOk ? `forwarded: ${sent.map((x) => '`' + x + '`').join(', ') || '(none)'} (all are schema fields; every required field is sent)`
             : `**FORWARDED PARAMETERS DO NOT MATCH THE SCHEMA**${!fw ? ' (not declared)' : ''}${unknown.length ? ` not in schema: ${unknown.map((x) => '`' + x + '`').join(', ')}` : ''}${missing.length ? ` required but not sent: ${missing.map((x) => '`' + x + '`').join(', ')}` : ''}`);
       } else native = `socket \`${p.sock}\`<br>**NOT IN SCHEMA**`;
-      for (const u of p.uses || []) { // further Herdr methods the action calls (re-check before sending)
-        const j = methods.indexOf(u); checks.push(j >= 0);
-        native += `<br>also calls \`${u}\` ${j >= 0 ? `(/schemas/request/oneOf/${j} → \`${defOf(j).name}\`)` : '**NOT IN SCHEMA**'}`;
-      }
     } else if (p.cli) {
       const c = cliCheck(p.cli); checks.push(c.ok);
-      const other = p.cli[1] === 'run' ? 'pane.run' : 'session.list';
-      native = `CLI \`herdr ${p.cli.join(' ')}\`<br>${c.text}<br>not a socket method: \`${other}\` ${methods.includes(other) ? 'EXISTS' : 'absent from schema'}`;
+      const other = p.cli[1] === 'run' ? 'pane.run' : p.cli[0] === 'session' ? 'session.list' : null; // the socket method a CLI command could be mistaken for
+      native = `CLI \`herdr ${p.cli.join(' ')}\`<br>${c.text}` + (other ? `<br>not a socket method: \`${other}\` ${methods.includes(other) ? 'EXISTS' : 'absent from schema'}` : '');
     } else if (p.portal) {
       const usesOk = (p.uses || []).every((m) => methods.includes(m)); checks.push(usesOk);
       native = (p.uses || []).length ? `portal operation (not a Herdr method); built from ${p.uses.map((m) => `\`${m}\` (/schemas/request/oneOf/${methods.indexOf(m)})`).join(', ')}` : `portal operation (not a Herdr method, makes no Herdr call): ${p.native || 'reads the portal\'s own `audit.jsonl`'}`;
     }
+    if (p.sock || p.cli) for (const u of p.uses || []) { // further Herdr methods the action calls (re-check before sending)
+      const j = methods.indexOf(u); checks.push(j >= 0);
+      native += `<br>also calls \`${u}\` ${j >= 0 ? `(/schemas/request/oneOf/${j} → \`${defOf(j).name}\`)` : '**NOT IN SCHEMA**'}`;
+    }
     const docs = (p.docs || []).map(([u, s]) => { const c = docCheck(u, s); checks.push(c.ok); return c.text; });
     const contractOk = checks.every(Boolean); if (!contractOk) contractFails += 1;
     const live = liveFor(name);
-    const gate = p.verified === false ? `off by default${a.optInEnv ? `; operator opt-in: \`${a.optInEnv}=1\`` : ''}` : 'on';
+    const gate = p.verified === false ? `off by default${a.optInEnv ? `; operator opt-in: \`${a.optInEnv}=1\`` : ''}` : a.gate ? `off by default; owner switch: \`${a.gate}=1\`` : 'on';
     const input = Object.keys(a.params).map((k) => '`' + k + '`').join(', ');
     rows.push({ name, live, contractOk, line: `| \`${name}\` | ${methodOf(name)} | ${native} | ${input} | ${docs.join('<br>')} | ${contractOk ? 'pass' : '**FAIL**'} | ${live} | ${gate} |` });
   }
@@ -111,7 +111,7 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVers
     ['`session.list` socket method', methods.includes('session.list') ? 'present' : 'absent from installed schema; `session_list` uses CLI `session list --json` (CLI ref > Sessions)'],
     ['`pane.run` socket method', methods.includes('pane.run') ? 'present' : 'absent; `pane_run` uses CLI `pane run`'],
     ['`agent.send_text`', methods.includes('agent.send_text') ? 'present' : 'absent; not implemented (pane_send_text only for panes without an agent)'],
-    ['`pane.read` with source `recent` / `recent_unwrapped`', 'exists in schema (ReadSource enum) but refused by portal policy: may send mouse-scroll input to idle full-screen agents (Agent automation > Alternate-screen history reads)'],
+    ['`pane.read` with source `recent` / `recent_unwrapped`', 'exists in schema (ReadSource enum); history reads, off unless the owner sets HERDR_PORTAL_ENABLE_HISTORY (403 source_disabled otherwise): an idle recognized agent is paged through its own scroll interface (Agent automation > Alternate-screen history reads), so only idle or done agents are read'],
     ['Answering a blocked dialog through any action other than `agent_decision`', 'not possible: `agent_prompt`, `agent_send_keys`, `pane_*` all refuse a blocked agent with 409 `blocked_requires_decision`'],
     ['`agent_decision` on dialogs that are not a vertical single-select list with a cursor (horizontal buttons, free text, `[y/n]` prompts)', 'refused with 422 `dialog_not_recognized`; nothing is sent'],
     ['`agent.start` native `args`', 'not exposed (no permission-bypass flags)'],
@@ -161,7 +161,7 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVers
 
 Generated ${generatedAt.slice(0, 10)} by \`scripts/gen-proof-matrix.js\`. Installed Herdr: **${herdrVersion}** (last proven live: ${pinned}; at run time every write is judged against the installed CLI's own schema, see lib/compat.js). Schema: output of \`${SCHEMA_SRC}\` — **${methods.length}** request methods (\`/schemas/request/oneOf\`, protocol ${schema.protocol}).
 
-**What this file is.** Evidence, not a switch. It enables and disables nothing: the runtime switches are \`proof.verified\` in \`lib/actions.js\`, shown in the last column, and the live contract check in \`lib/compat.js\`, which applies the same \`forwards\` declarations to whatever Herdr is installed when the portal runs. Three different kinds of evidence are kept apart:
+**What this file is.** Evidence, not a switch. It enables and disables nothing: the runtime switches are \`proof.verified\` and \`gate\` in \`lib/actions.js\`, shown in the last column, and the live contract check in \`lib/compat.js\`, which applies the same \`forwards\` declarations to whatever Herdr is installed when the portal runs. Three different kinds of evidence are kept apart:
 
 - **Contract (static):** the native method exists in the installed schema, every field the portal forwards is a schema field, every field the schema requires is forwarded, and the cited documentation headings exist. This proves names, not that a forwarded value is valid, what the response means or that anything executed.
 - **Live observation (historical):** the date of a past run of \`scripts/smoke-actions.js\` / \`scripts/decision-proof.js\` against a real Herdr. A receipt counts only when it carries the identity (source hash, Herdr version, protocol) of this source and Herdr build; otherwise the cell says \`untested\`. No receipt notes are copied into this file.
