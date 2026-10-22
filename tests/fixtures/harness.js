@@ -14,7 +14,8 @@ function req(port, method, p, { token = TOKEN, body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
     const r = http.request({ host: '127.0.0.1', port, method, path: p, headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}), ...headers } }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch { /* html */ } resolve({ status: res.statusCode, json: j, text: b, headers: res.headers }); });
+      // decoding each raw chunk would turn a multi-byte character split at a chunk boundary into two replacement characters
+      let b = ''; res.setEncoding('utf8'); res.on('data', (c) => (b += c)); res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch { /* html */ } resolve({ status: res.statusCode, json: j, text: b, headers: res.headers }); });
     });
     r.on('error', reject); if (data) r.write(data); r.end();
   });
