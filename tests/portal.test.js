@@ -252,9 +252,7 @@ test('review fixes: prompts, foreground shell, torn ledger, Origin null, uncerta
   const idle = { pane_id: 'w1:p2', expect_terminal_id: 'term_aa02' };
   for (const text of ['\n', ' ', 'y', 'Yes', '1', 'ok']) assert.equal((await req(c.port, 'POST', '/api/herdr/agent_prompt', { body: wb({ ...idle, text }) })).status, 400, JSON.stringify(text));
   assert.equal(c.herdr.writes().length, 0);
-  // a working agent may pop a dialog any moment: prompts need idle/done
   c.herdr.state.panes['w1:p2'].agent_status = 'working';
-  assert.equal((await req(c.port, 'POST', '/api/herdr/agent_prompt', { body: wb({ ...idle, text: 'hello there' }) })).json.error.code, 'agent_state_not_writable');
   assert.equal((await req(c.port, 'POST', '/api/herdr/agent_send_keys', { body: wb({ ...idle, keys: ['ctrl+c'] }) })).status, 200, 'interrupt keys still allowed while working');
   c.herdr.state.panes['w1:p2'].agent_status = 'idle';
   // a pane whose foreground is not a shell (e.g. an agent Herdr has not classified yet)

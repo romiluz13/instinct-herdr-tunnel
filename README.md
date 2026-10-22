@@ -65,7 +65,7 @@ You need Node.js 22 or newer and [Herdr](https://herdr.dev/docs/install/) runnin
 
 ```sh
 git clone https://github.com/romiluz13/instinct-herdr-tunnel.git && cd instinct-herdr-tunnel
-npm test                   # 343 tests against fakes; touches no real pane
+npm test                   # 351 tests against fakes; touches no real pane
 
 # create the token (32 random bytes, file mode 0600, never printed; first time only, it replaces an existing one), then start the server
 node -e 'require("./lib/config").ensureDirs(); require("./lib/security").createToken()'
