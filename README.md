@@ -47,7 +47,7 @@ PASS  scripts/e2e.js, including its write round trip, passes against the same di
 ALL 19 STEPS PASSED on herdr 0.9.5
 ```
 
-"Arrive" means a small program in the pane logged the bytes it received. What this run does *not* prove (a recognized agent paged by Herdr, Linux, the owner typing during a click) is listed in [docs/control.md](docs/control.md#not-covered).
+"Arrive" means a small program in the pane logged the bytes it received. What this run does *not* prove (a recognized agent paged by Herdr, which was checked once by hand, the owner typing during a click, a real Herdr on Linux) is listed in [docs/control.md](docs/control.md#not-covered).
 
 ## What you get
 
@@ -123,7 +123,7 @@ flowchart LR
 **Alpha.** One maintainer, one tested environment.
 
 - **Future Herdr versions are checked, not assumed.** The portal reads the installed `herdr api schema --json` and, per action, refuses a write (`503 contract_mismatch`, nothing sent) when a method or CLI subcommand it relies on is gone, or a parameter or new required field of the calls it forwards by name changed. Every write also confirms the target server runs the build that was checked. This compares request parameter names and required fields only: not types, enums, response fields or what a call now means. Live testing covered Herdr 0.9.5 only; `GET /api/health` shows `contract.verified_live`, and `HERDR_PORTAL_STRICT_VERSION=1` restricts writes to the proven version.
-- **Not proven:** a recognized agent paged by Herdr in a live run, the owner typing while a click is delivered, Linux, assistive technology, and the browser page outside one headless Chrome 156 run (layout, tap, wheel and click were checked there at phone and desktop sizes; the rest of the page is tested in a small DOM against a real portal).
+- **Not proven:** a recognized agent paged by Herdr in a script (it was read once by hand on live claude, codex and droid agents), the owner typing while a click is delivered, a real Herdr on Linux (CI runs the suite there against fakes), assistive technology, and the browser page outside one headless Chrome 156 run (layout, tap, wheel and click were checked there at phone and desktop sizes; the rest of the page is tested in a small DOM against a real portal).
 - **No rotation** of `audit.jsonl` or `ledger.jsonl`; both only grow.
 - **Remote (SSH) Herdr machines are not covered.**
 

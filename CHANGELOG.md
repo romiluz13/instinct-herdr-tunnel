@@ -36,4 +36,4 @@ All notable changes. The format follows [Keep a Changelog](https://keepachangelo
 
 ### Not proven
 
-A recognized agent paged by Herdr in a live run, the owner typing while a click is delivered, Linux, assistive technology, and the page beyond one headless Chrome 156 run. See [control.md](docs/control.md#not-covered).
+A recognized agent paged by Herdr in a script (it was read once by hand on live claude, codex and droid agents), the owner typing while a click is delivered, a real Herdr on Linux (CI runs the suite there against fakes), assistive technology, and the page beyond one headless Chrome 156 run. See [control.md](docs/control.md#not-covered).

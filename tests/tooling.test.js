@@ -486,7 +486,9 @@ process.exit(1);
   return { launchctl: lc, health, kill, hits, plist: path.join(kit.home, 'Library', 'LaunchAgents', 'dev.herdr-portal.plist') };
 }
 
-test('portalctl install over a loaded portal boots it out, waits, bootstraps the new definition and proves a new instance with the new flags', async (t) => {
+// portalctl manages launchd and checks who owns the port with lsof at its macOS path; Linux CI has lsof elsewhere, so these three cannot reach the token.
+const NO_MAC_LSOF = !fs.existsSync('/usr/sbin/lsof') && 'no lsof at /usr/sbin/lsof (macOS path)';
+test('portalctl install over a loaded portal boots it out, waits, bootstraps the new definition and proves a new instance with the new flags', { skip: NO_MAC_LSOF }, async (t) => {
   const kit = installKit(); const f = statefulLaunchctl(kit);
   t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true })); // stop the fake portals before their state is removed
   const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
@@ -511,7 +513,7 @@ test('portalctl install over a loaded portal boots it out, waits, bootstraps the
   assert.notEqual(after.instance_id, now.instance_id); assert.equal(after.flags.strict_version, false, 'a reinstall without the flag revokes it in the running portal');
 });
 
-test('portalctl install proves the history, control and agent-click switches the same way, and a reinstall without them turns them off again', async (t) => {
+test('portalctl install proves the history, control and agent-click switches the same way, and a reinstall without them turns them off again', { skip: NO_MAC_LSOF }, async (t) => {
   const kit = installKit(); const f = statefulLaunchctl(kit);
   t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
   const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
@@ -531,7 +533,7 @@ test('portalctl install proves the history, control and agent-click switches the
   assert.deepEqual((await f.health(env)).capabilities, { history: false, control: false, agent_click: false }, 'the plist is rewritten on every install, so a switch not set at install time is gone');
 });
 
-test('portalctl reinstall never sends the token to a listener that is not owned by this user, and fails instead of claiming proof', async (t) => {
+test('portalctl reinstall never sends the token to a listener that is not owned by this user, and fails instead of claiming proof', { skip: NO_MAC_LSOF }, async (t) => {
   const kit = installKit(); const f = statefulLaunchctl(kit);
   t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
   const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
