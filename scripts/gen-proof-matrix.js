@@ -112,7 +112,7 @@ function buildReport({ actions, methodOf, schema, herdrVersion, pinned, docsVers
     ['`pane.run` socket method', methods.includes('pane.run') ? 'present' : 'absent; `pane_run` uses CLI `pane run`'],
     ['`agent.send_text`', methods.includes('agent.send_text') ? 'present' : 'absent; not implemented (pane_send_text only for panes without an agent)'],
     ['`pane.read` with source `recent` / `recent_unwrapped`', 'exists in schema (ReadSource enum); history reads, off unless the owner sets HERDR_PORTAL_ENABLE_HISTORY (403 source_disabled otherwise): an idle recognized agent is paged through its own scroll interface (Agent automation > Alternate-screen history reads), so only idle or done agents are read'],
-    ['Answering a blocked dialog through any action other than `agent_decision`', 'not possible: `agent_prompt`, `agent_send_keys`, `pane_*` all refuse a blocked agent with 409 `blocked_requires_decision`'],
+    ['Answering a blocked dialog through any action other than `agent_decision`', 'not possible while Herdr reports the agent as blocked: `agent_prompt`, `agent_send_keys`, `pane_*` all refuse it with 409 `blocked_requires_decision`. A dialog Herdr has not yet reported as blocked is only caught if its shape is one the portal recognizes (a working agent\'s prompt reads the screen first)'],
     ['`agent_decision` on dialogs that are not a vertical single-select list with a cursor (horizontal buttons, free text, `[y/n]` prompts)', 'refused with 422 `dialog_not_recognized`; nothing is sent'],
     ['`agent.start` native `args`', 'not exposed (no permission-bypass flags)'],
     ['takeover/attach/control, focus, rename, layout, view, close/stop, worktree, server-control, plugin methods', 'not in allowlist; unreachable (404 unknown_action)'],

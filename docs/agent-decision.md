@@ -12,7 +12,7 @@ The opt-in is the literal value `1` in the portal's own environment: `HERDR_PORT
 - **It is process-global.** Once the variable is set, the action is available to every holder of the token, for every session and pane the portal can reach. There is no per-caller or per-pane switch.
 - **`portalctl install` passes it through only when you ask.** Run install with `HERDR_PORTAL_ENABLE_AGENT_DECISION=1` and the portal's LaunchAgent carries it (the tunnel's does not). Without it, or with any other value, the service keeps the action off. A reinstall rewrites the plist from the environment of that run, so run it again with the variable set, or without it to turn the action off.
 
-Other actions never answer a dialog: `agent_prompt`, `agent_send_keys` and the `pane_*` actions refuse a blocked agent with `409 blocked_requires_decision` and send nothing. With the action off, answer the dialog in Herdr.
+No other action answers a dialog on purpose: `agent_prompt`, `agent_send_keys` and the `pane_*` actions refuse an agent Herdr reports as blocked with `409 blocked_requires_decision` and send nothing. A dialog Herdr has not yet reported as blocked is a different case: a prompt to a working agent is refused only if the dialog's shape is one the portal recognizes ([security.md](security.md#residual-risks)). With the action off, answer the dialog in Herdr.
 
 ## Request
 

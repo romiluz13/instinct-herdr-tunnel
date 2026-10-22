@@ -53,9 +53,10 @@ ALL 19 STEPS PASSED on herdr 0.9.5
 
 - 🔭 **The whole chat, not four rows.** `pane_read` with `source=recent_unwrapped` returns up to 2000 lines of a plain pane's scrollback, or the last 1000 rows of an idle agent's chat (Herdr 0.9.5 stops there; checked live on claude, codex and droid), and says how complete it is (`history_mode`, `lines_returned`, `truncated`). "Nothing beyond the screen" is a typed answer (`409 history_unavailable` with the screen attached), never an empty success. *Proof:* `tests/history.test.js`.
 - 🕹️ **Scroll and click, bound to what the caller saw.** `pane_scroll` moves Herdr's own scrollback or sends wheel events to a full-screen app; `pane_click` clicks one cell, only if the text the caller expects is still under it. Clicks on rows that look like a dialog choice or hold a confirm or refuse word (pattern matching, [not a guarantee](docs/control.md#click)), rows that cannot be mapped to a cell, and a terminal whose real size cannot be confirmed are refused with nothing sent. *Proof:* `tests/control.test.js`, `tests/click.test.js`, the live run above.
+- 📨 **A follow-up for a working agent.** `agent_prompt` accepts a working agent and answers `input_sent_queued`: the prompt was delivered, and the agent's own interface decides whether it queues it or applies it at once. A blocked agent is still refused. *Proof:* `tests/prompt-queue.test.js`.
 - 🧱 **An allowlist in front of the socket.** 26 actions ([API](docs/api.md)); unknown actions and parameters are refused. *Proof:* [docs/proof-matrix.md](docs/proof-matrix.md) checks every action against the installed Herdr schema and docs.
 - 🔁 **Replay-safe writes, and a record.** Each write carries an idempotency key and its result goes into an fsync'd ledger that survives restarts. A timeout or crash between "maybe sent" and "recorded" becomes `needs_review` and is never retried by the portal. One JSON line per write in `audit.jsonl`, refusals included. *Proof:* the replay, concurrency, crash and audit tests.
-- ⛔ **Dialogs stay with you.** Every action refuses a blocked agent and sends nothing. The one action that can answer a dialog, `agent_decision`, is off by default ([details](docs/agent-decision.md)). *Proof:* the refusal tests in `tests/portal.test.js`.
+- ⛔ **Dialogs stay with you, with one gap.** Every action refuses an agent that Herdr reports as blocked and sends nothing, and the one action that can answer a dialog, `agent_decision`, is off by default ([details](docs/agent-decision.md)). The gap: a prompt to a *working* agent is sent after a screen check, so a dialog in a shape the portal does not recognize, or one raised an instant before Herdr marks the agent blocked, can receive the text and its Enter ([residual risk](docs/security.md#residual-risks)). *Proof:* the refusal tests in `tests/portal.test.js` and `tests/prompt-queue.test.js`.
 
 A browser page ships with it: the inventory, a live view of the selected pane that keeps its place while it updates, history with *Load more*, scroll buttons and a click mode.
 
@@ -65,7 +66,7 @@ You need Node.js 22 or newer and [Herdr](https://herdr.dev/docs/install/) runnin
 
 ```sh
 git clone https://github.com/romiluz13/instinct-herdr-tunnel.git && cd instinct-herdr-tunnel
-npm test                   # 343 tests against fakes; touches no real pane
+npm test                   # 351 tests against fakes; touches no real pane
 
 # create the token (32 random bytes, file mode 0600, never printed; first time only, it replaces an existing one), then start the server
 node -e 'require("./lib/config").ensureDirs(); require("./lib/security").createToken()'

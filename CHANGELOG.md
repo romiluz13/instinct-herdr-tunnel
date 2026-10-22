@@ -18,6 +18,7 @@ All notable changes. The format follows [Keep a Changelog](https://keepachangelo
 
 ### Changed
 
+- **`agent_prompt` accepts a `working` agent.** It answers `input_sent_queued` (HTTP 200) with a `note`: the prompt was submitted, and the agent's own interface decides whether it queues it or applies it at once. A `blocked` or `unknown` agent is still refused with a typed 409 and nothing is sent (Herdr itself rejects a prompt for a blocked agent), and a working agent whose screen shows a recognized dialog is refused with `409 dialog_on_screen`; an unreadable screen is `502 screen_unreadable`. `agent_decision` stays off and no approve or deny action was added.
 - The version proven live moved from Herdr 0.9.3 to 0.9.5 (`HERDR_PORTAL_STRICT_VERSION=1` now restricts writes to 0.9.5). The proof matrix was regenerated against 0.9.5.
 - The proof matrix lists the socket methods that CLI-based actions also call.
 - `portalctl status` and `portalctl url` also find a cloudflared service installed without `sudo` (a LaunchAgent), not only one installed with it (a LaunchDaemon).
