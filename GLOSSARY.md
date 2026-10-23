@@ -75,8 +75,18 @@ A short-lived Herdr attachment the portal opens for one click, or one scroll of 
 _Avoid_: Session, connection
 
 **Switch**:
-An environment variable with which the owner turns on a capability that is off by default: history, control or agent click.
+An environment variable with which the owner turns on a capability that is off by default: history, control, agent click or pane tags.
 _Avoid_: Flag, feature toggle, setting
+
+## What the owner sees in Herdr
+
+**Pane tag**:
+A short display-only label the portal puts on a pane it sent, or may have sent, input to, such as `prompt sent 14:07`, for Herdr's sidebar. It holds a verb, an outcome and a time, never input text, and expires after 15 minutes.
+_Avoid_: Badge, status
+
+**Plugin**:
+The small Herdr plugin in `plugin/` that opens an activity tab and narrows the Agents list to the agents the portal touched. It cannot send input to a pane.
+_Avoid_: Extension, add-on
 
 ## What the portal remembers
 

@@ -10,7 +10,7 @@ const { Audit } = require('./lib/audit');
 const { Inventory } = require('./lib/inventory');
 const herdr = require('./lib/herdr');
 const { createServer } = require('./lib/server');
-const { HISTORY, CONTROL, AGENT_CLICK, capabilities } = require('./lib/gates');
+const { HISTORY, CONTROL, AGENT_CLICK, TAG_PANES, capabilities } = require('./lib/gates');
 
 // Structured logs: event name + non-secret fields only.
 const log = (event, fields = {}) => process.stdout.write(JSON.stringify({ t: new Date().toISOString(), event, ...fields }) + '\n');
@@ -64,7 +64,7 @@ function tunnelProbe() {
   })().finally(() => { reading = null; }));
   await ctx.refreshCompat(true);
   const caps = capabilities();
-  for (const [name, key, accepted] of [[HISTORY, 'history', '1, agents or all'], [CONTROL, 'control', '1'], [AGENT_CLICK, 'agent_click', '1']]) {
+  for (const [name, key, accepted] of [[HISTORY, 'history', '1, agents or all'], [CONTROL, 'control', '1'], [AGENT_CLICK, 'agent_click', '1'], [TAG_PANES, 'tag_panes', '1']]) {
     if (caps[key] === 'invalid') log('gate_invalid', { name, value: String(process.env[name]).slice(0, 20), effect: `${key} is off; use ${accepted}` });
   }
   log('boot', { version: config.version, herdr: ctx.herdrVersion, verified_version: PINNED_HERDR_VERSION, strict: ctx.strict, writes_enabled: ctx.writesEnabled, capabilities: caps });

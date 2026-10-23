@@ -513,24 +513,24 @@ test('portalctl install over a loaded portal boots it out, waits, bootstraps the
   assert.notEqual(after.instance_id, now.instance_id); assert.equal(after.flags.strict_version, false, 'a reinstall without the flag revokes it in the running portal');
 });
 
-test('portalctl install proves the history, control and agent-click switches the same way, and a reinstall without them turns them off again', { skip: NO_MAC_LSOF }, async (t) => {
+test('portalctl install proves the history, control, agent-click and pane-tag switches the same way, and a reinstall without them turns them off again', { skip: NO_MAC_LSOF }, async (t) => {
   const kit = installKit(); const f = statefulLaunchctl(kit);
   t.after(f.kill); t.after(() => fs.rmSync(kit.dir, { recursive: true, force: true }));
   const env = kit.env({ HERDR_PORTAL_LAUNCHCTL: f.launchctl });
   const first = await runAsync(['bin/portalctl', 'install'], env);
   assert.equal(first.status, 0, first.stdout + first.stderr);
-  assert.deepEqual((await f.health(env)).capabilities, { history: false, control: false, agent_click: false }, 'nothing is on unless the installer asked');
-  const on = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_ENABLE_HISTORY: 'agents', HERDR_PORTAL_ENABLE_CONTROL: '1', HERDR_PORTAL_ENABLE_AGENT_CLICK: '1' });
+  assert.deepEqual((await f.health(env)).capabilities, { history: false, control: false, agent_click: false, tag_panes: false }, 'nothing is on unless the installer asked');
+  const on = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_ENABLE_HISTORY: 'agents', HERDR_PORTAL_ENABLE_CONTROL: '1', HERDR_PORTAL_ENABLE_AGENT_CLICK: '1', HERDR_PORTAL_TAG_PANES: '1' });
   assert.equal(on.status, 0, on.stdout + on.stderr);
-  assert.deepEqual((await f.health(env)).capabilities, { history: 'agents', control: true, agent_click: true });
-  assert.match(on.stdout, /capabilities \{"history":"agents","control":true,"agent_click":true\}/);
+  assert.deepEqual((await f.health(env)).capabilities, { history: 'agents', control: true, agent_click: true, tag_panes: true });
+  assert.match(on.stdout, /capabilities \{"history":"agents","control":true,"agent_click":true,"tag_panes":true\}/);
   const typo = await runAsync(['bin/portalctl', 'install'], { ...env, HERDR_PORTAL_ENABLE_CONTROL: 'true' });
   assert.equal(typo.status, 0, typo.stdout + typo.stderr);
   assert.match(typo.stderr, /warning: HERDR_PORTAL_ENABLE_CONTROL=true is not a value the portal accepts \(1\)/);
   assert.equal((await f.health(env)).capabilities.control, false, 'a typo is dropped, not passed on');
   const off = await runAsync(['bin/portalctl', 'install'], env);
   assert.equal(off.status, 0, off.stdout + off.stderr);
-  assert.deepEqual((await f.health(env)).capabilities, { history: false, control: false, agent_click: false }, 'the plist is rewritten on every install, so a switch not set at install time is gone');
+  assert.deepEqual((await f.health(env)).capabilities, { history: false, control: false, agent_click: false, tag_panes: false }, 'the plist is rewritten on every install, so a switch not set at install time is gone');
 });
 
 test('portalctl reinstall never sends the token to a listener that is not owned by this user, and fails instead of claiming proof', { skip: NO_MAC_LSOF }, async (t) => {

@@ -18,6 +18,7 @@
 | `HERDR_PORTAL_ENABLE_HISTORY` | unset (off) | `agents` (or `1`) lets `pane_read` return `recent` and `recent_unwrapped` for panes that host a recognized agent; `all` adds plain panes, whose scrollback can hold keys and tokens. Any other value is off, is logged at start and reads `invalid` in `GET /api/health`. See [control.md](control.md) |
 | `HERDR_PORTAL_ENABLE_CONTROL` | unset (off) | `1` enables `pane_scroll` and `pane_click`; any other value leaves them off |
 | `HERDR_PORTAL_ENABLE_AGENT_CLICK` | unset (off) | `1` also allows `pane_click` on a pane that hosts an `idle` or `done` agent. It counts only while `HERDR_PORTAL_ENABLE_CONTROL` is `1` |
+| `HERDR_PORTAL_TAG_PANES` | unset (off) | `1` makes the portal set a display-only tag on each pane it sends, or may have sent, input to (`prompt sent 14:07`, token `tunnel_last`) for Herdr's sidebar. Any other value leaves it off. `portalctl install` copies it into the portal LaunchAgent when set. See [plugin.md](plugin.md) |
 | `HERDR_PORTAL_HISTORY_TIMEOUT_MS` | `30000` | How long a history read of an agent pane may take before `504 history_timeout` |
 | `HERDR_PORTAL_CONTROLLER_LIFETIME_MS` | `5000` | How long a scroll or click controller may live before it is stopped with `SIGTERM` |
 | `HERDR_PORTAL_CONTROLLER_KILL_GRACE_MS` | `1000` | How long after that `SIGTERM` the controller gets before `SIGKILL` |

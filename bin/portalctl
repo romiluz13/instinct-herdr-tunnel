@@ -9,7 +9,7 @@ const http = require('http');
 const net = require('net');
 const { config, ensureDirs } = require('../lib/config');
 const { createToken } = require('../lib/security');
-const { HISTORY, CONTROL, AGENT_CLICK, capabilities } = require('../lib/gates');
+const { HISTORY, CONTROL, AGENT_CLICK, TAG_PANES, capabilities } = require('../lib/gates');
 
 const ROOT = path.join(__dirname, '..');
 const UID = process.getuid();
@@ -28,9 +28,9 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 // launchd gives services this minimal PATH; the plist records it and the install preflight runs herdr under it.
 const SERVICE_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
-// The switches for history, scroll and click reach the portal service only with a value it understands; anything else would leave
+// The switches for history, scroll, click and pane tags reach the portal service only with a value it understands; anything else would leave
 // the capability off in the service while the installer believed it on.
-const SWITCH_VALUES = { [HISTORY]: ['1', 'agents', 'all'], [CONTROL]: ['1'], [AGENT_CLICK]: ['1'] };
+const SWITCH_VALUES = { [HISTORY]: ['1', 'agents', 'all'], [CONTROL]: ['1'], [AGENT_CLICK]: ['1'], [TAG_PANES]: ['1'] };
 const installSwitches = () => Object.fromEntries(Object.entries(SWITCH_VALUES).filter(([k, ok]) => ok.includes(process.env[k])).map(([k]) => [k, process.env[k]]));
 const droppedSwitches = () => Object.keys(SWITCH_VALUES).filter((k) => !['', '0', undefined].includes(process.env[k]) && !SWITCH_VALUES[k].includes(process.env[k]));
 const PASS_THROUGH = ['HERDR_PORTAL_STATE_DIR', 'HERDR_PORTAL_LOG_DIR', 'HERDR_PORTAL_HOSTS', 'HERDR_PORTAL_TUNNEL_METRICS', 'CLOUDFLARED_BIN', 'HERDR_PORTAL_DROP_DIR'];
@@ -164,7 +164,7 @@ async function verifyPortal(before) {
   const got = { strict_version: !!(b.flags && b.flags.strict_version), agent_decision: !!(b.flags && b.flags.agent_decision) };
   if (got.strict_version !== want.strict_version || got.agent_decision !== want.agent_decision) throw new Error(`the new portal instance reports flags ${JSON.stringify(got)} but this install set ${JSON.stringify(want)}`);
   const wantCaps = capabilities(installSwitches()); const gotCaps = b.capabilities || {};
-  if (['history', 'control', 'agent_click'].some((k) => gotCaps[k] !== wantCaps[k])) throw new Error(`the new portal instance reports capabilities ${JSON.stringify(gotCaps)} but this install set ${JSON.stringify(wantCaps)}`);
+  if (['history', 'control', 'agent_click', 'tag_panes'].some((k) => gotCaps[k] !== wantCaps[k])) throw new Error(`the new portal instance reports capabilities ${JSON.stringify(gotCaps)} but this install set ${JSON.stringify(wantCaps)}`);
   return `new instance ${b.instance_id.slice(0, 8)} started ${b.started_at}, flags ${JSON.stringify(got)}, capabilities ${JSON.stringify(wantCaps)}`;
 }
 

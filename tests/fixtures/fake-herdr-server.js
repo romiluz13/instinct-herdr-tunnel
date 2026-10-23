@@ -87,6 +87,7 @@ function start(sockPath) {
           }
           case 'agent.prompt': case 'pane.send_text': case 'pane.send_keys': reply({ type: 'ok', agent: pane }); break;
           case 'agent.start': reply({ type: 'agent_info', agent: pane }); break;
+          case 'pane.report_metadata': reply({ type: 'ok' }); break;
           default: err('unknown_method', req.method);
         }
       }

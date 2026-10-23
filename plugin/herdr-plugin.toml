@@ -1,0 +1,30 @@
+id = "romiluz13.herdr-tunnel"
+name = "Instinct Herdr Tunnel"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Watch what an AI assistant does to your agents through the Instinct Herdr Tunnel portal, and narrow the Agents list to the ones it touched."
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "activity"
+title = "Tunnel: show activity"
+contexts = ["workspace"]
+command = ["node", "bin/open-activity.js"]
+
+[[actions]]
+id = "agents-touched"
+title = "Tunnel: show only agents it touched"
+contexts = ["workspace"]
+command = ["node", "bin/view.js", "set"]
+
+[[actions]]
+id = "agents-all"
+title = "Tunnel: show all agents again"
+contexts = ["workspace"]
+command = ["node", "bin/view.js", "clear"]
+
+[[panes]]
+id = "activity"
+title = "Tunnel activity"
+placement = "tab"
+command = ["node", "bin/activity.js"]

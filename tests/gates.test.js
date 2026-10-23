@@ -21,11 +21,11 @@ test('history gate: unset, 0, 1, agents and all are understood (case-sensitive);
 
 test('control gate accepts only 1; agent click needs control as well', () => {
   const caps = (env) => capabilities(env);
-  assert.deepEqual(caps({}), { history: false, control: false, agent_click: false });
+  assert.deepEqual(caps({}), { history: false, control: false, agent_click: false, tag_panes: false });
   for (const v of ['0', '']) assert.equal(caps({ [C]: v }).control, false, JSON.stringify(v));
   for (const v of ['true', 'yes', 'on', '2']) assert.equal(caps({ [C]: v }).control, 'invalid', JSON.stringify(v));
   assert.equal(caps({ [C]: '1' }).control, true);
-  assert.deepEqual(caps({ [A]: '1' }), { history: false, control: false, agent_click: false }, 'agent click alone is not on');
+  assert.deepEqual(caps({ [A]: '1' }), { history: false, control: false, agent_click: false, tag_panes: false }, 'agent click alone is not on');
   assert.equal(caps({ [C]: '1', [A]: '1' }).agent_click, true);
   assert.equal(caps({ [C]: '1', [A]: 'true' }).agent_click, 'invalid');
   assert.equal(caps({ [C]: '1', [A]: '0' }).agent_click, false);
@@ -52,14 +52,22 @@ test('dispatch: an action with a gate is 404 action_disabled until its variable 
 
 test('health reports the effective capabilities; a mistyped value is off, flagged invalid and logged at startup', async (t) => {
   const off = await setup(t);
-  assert.deepEqual((await req(off.port, 'GET', '/api/health')).json.capabilities, { history: false, control: false, agent_click: false });
+  assert.deepEqual((await req(off.port, 'GET', '/api/health')).json.capabilities, { history: false, control: false, agent_click: false, tag_panes: false });
   const on = await setup(t, { env: { [H]: 'ALL', [C]: '1', [A]: '1' } });
-  assert.deepEqual((await req(on.port, 'GET', '/api/health')).json.capabilities, { history: 'invalid', control: true, agent_click: true });
+  assert.deepEqual((await req(on.port, 'GET', '/api/health')).json.capabilities, { history: 'invalid', control: true, agent_click: true, tag_panes: false });
   assert.match(on.proc.out(), /"event":"gate_invalid"[^\n]*HERDR_PORTAL_ENABLE_HISTORY/);
   const typo = await setup(t, { env: { [C]: 'true', [A]: 'yes' } });
-  assert.deepEqual((await req(typo.port, 'GET', '/api/health')).json.capabilities, { history: false, control: 'invalid', agent_click: 'invalid' });
+  assert.deepEqual((await req(typo.port, 'GET', '/api/health')).json.capabilities, { history: false, control: 'invalid', agent_click: 'invalid', tag_panes: false });
   assert.match(typo.proc.out(), /"event":"gate_invalid"[^\n]*HERDR_PORTAL_ENABLE_CONTROL/);
   assert.match(typo.proc.out(), /"event":"gate_invalid"[^\n]*HERDR_PORTAL_ENABLE_AGENT_CLICK/);
   const agents = await setup(t, { env: { [H]: '1', [A]: '1' } });
-  assert.deepEqual((await req(agents.port, 'GET', '/api/health')).json.capabilities, { history: 'agents', control: false, agent_click: false });
+  assert.deepEqual((await req(agents.port, 'GET', '/api/health')).json.capabilities, { history: 'agents', control: false, agent_click: false, tag_panes: false });
+});
+
+test('the pane-tag gate accepts only 1 and stands alone: it needs neither control nor history', () => {
+  const T = 'HERDR_PORTAL_TAG_PANES';
+  assert.equal(capabilities({ [T]: '1' }).tag_panes, true);
+  for (const v of ['0', '']) assert.equal(capabilities({ [T]: v }).tag_panes, false, JSON.stringify(v));
+  for (const v of ['true', 'yes', '2']) assert.equal(capabilities({ [T]: v }).tag_panes, 'invalid', JSON.stringify(v));
+  assert.deepEqual(capabilities({ [T]: '1' }), { history: false, control: false, agent_click: false, tag_panes: true });
 });
