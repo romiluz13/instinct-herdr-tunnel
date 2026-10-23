@@ -58,6 +58,13 @@ test('the README states the real number of actions, everywhere it states one', (
   assert.deepEqual([...new Set(stated)], [n]);
 });
 
+test('no document states a count of tests: a hand-kept number goes stale and cannot be checked without running the suite', () => {
+  for (const f of markdown()) {
+    const text = fs.readFileSync(f, 'utf8');
+    assert.doesNotMatch(text, /\b\d{2,5} tests\b/, `${path.relative(ROOT, f)} states a test count`);
+  }
+});
+
 test('the documents that name the Herdr version proven live name the pinned one', () => {
   for (const file of ['README.md', 'docs/configuration.md', 'docs/control.md']) {
     const text = read(...file.split('/')).replace(/\b\d+\.\d+\.\d+\.\d+\b/g, ''); // addresses such as 127.0.0.1 are not versions
