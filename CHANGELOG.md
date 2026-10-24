@@ -1,8 +1,10 @@
 # Changelog
 
-All notable changes. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project is alpha and has not been released yet; `package.json` stays at 1.0.0 until it is.
+All notable changes. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project is alpha; the first release is 0.1.0, and the Herdr plugin in `plugin/` carries the same number.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-24
 
 ### Added
 
