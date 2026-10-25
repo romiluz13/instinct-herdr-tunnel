@@ -10,6 +10,7 @@ const net = require('net');
 const { config, ensureDirs } = require('../lib/config');
 const { createToken } = require('../lib/security');
 const { HISTORY, CONTROL, AGENT_CLICK, TAG_PANES, capabilities } = require('../lib/gates');
+const diagnose = require('../lib/diagnose');
 
 const ROOT = path.join(__dirname, '..');
 const UID = process.getuid();
@@ -214,6 +215,11 @@ const cmds = {
     } catch (e) { console.log('health  token file unreadable: ' + e.code); }
     await cmds.url();
   },
+  async diagnose() {
+    const r = lc('print', `${DOMAIN}/${LABELS.portal}`);
+    const launchd = { loaded: r.status === 0, pid: /\bpid = (\d+)/.exec(r.stdout || '')?.[1] || null };
+    console.log(diagnose.render(await diagnose.collect({ config, launchd })).join('\n'));
+  },
   async url() {
     let u = null; try { u = fs.readFileSync(config.tunnelUrlFile, 'utf8').trim(); } catch { /* none */ }
     let named = false; let host = null;
@@ -237,5 +243,5 @@ const cmds = {
 };
 
 const [cmd, arg] = process.argv.slice(2);
-if (!cmds[cmd]) { console.log('usage: portalctl <install|plist|start|stop|restart|status|url|logs|token-copy|rotate-token|revoke|uninstall> [portal|tunnel|--copy]'); process.exit(cmd ? 2 : 0); }
+if (!cmds[cmd]) { console.log('usage: portalctl <install|plist|start|stop|restart|status|diagnose|url|logs|token-copy|rotate-token|revoke|uninstall> [portal|tunnel|--copy]'); process.exit(cmd ? 2 : 0); }
 cmds[cmd](arg).catch((e) => { console.error('error:', e.message); process.exit(1); });

@@ -136,3 +136,31 @@ test('auditPath follows the portal: HERDR_PORTAL_LOG_DIR, else the default under
   assert.equal(feed.auditPath({ HERDR_PORTAL_LOG_DIR: '/x/logs' }, '/h'), '/x/logs/audit.jsonl');
   assert.equal(feed.auditPath({}, '/h'), '/h/Library/Logs/herdr-portal/audit.jsonl');
 });
+
+test('tunnelFrom: only cloudflared\'s own answers count; no answer means no tunnel until one has been seen, and gone after that', () => {
+  assert.deepEqual(feed.tunnelFrom({ status: 200, body: '{"status":200,"readyConnections":4,"connectorId":"x"}' }, false), { state: 'up', connections: 4, seen: true });
+  assert.deepEqual(feed.tunnelFrom({ status: 503, body: '{"status":503,"readyConnections":0,"connectorId":"x"}' }, true), { state: 'down', connections: 0, seen: true });
+  assert.deepEqual(feed.tunnelFrom(null, false), { state: 'none', connections: null, seen: false });
+  assert.deepEqual(feed.tunnelFrom(null, true), { state: 'gone', connections: null, seen: true });
+  for (const other of [{ status: 404, body: 'not found' }, { status: 200, body: 'ok' }, { status: 503, body: 'unavailable' }, { status: 500, body: '{"readyConnections":0}' }]) {
+    assert.deepEqual(feed.tunnelFrom(other, false), { state: 'none', connections: null, seen: false }, `${other.status} ${other.body}: another service on that port says nothing about the tunnel`);
+    assert.deepEqual(feed.tunnelFrom(other, true), { state: 'gone', connections: null, seen: true }, 'and after a tunnel was seen it counts as the connector being gone');
+  }
+});
+
+test('metricsAddress: the tunnel is only asked on this machine; anything else falls back to cloudflared\'s default', () => {
+  assert.equal(feed.metricsAddress({}), '127.0.0.1:20241');
+  assert.equal(feed.metricsAddress({ HERDR_PORTAL_TUNNEL_METRICS: '127.0.0.1:20242' }), '127.0.0.1:20242');
+  assert.equal(feed.metricsAddress({ HERDR_PORTAL_TUNNEL_METRICS: 'localhost:9' }), 'localhost:9');
+  for (const bad of ['evil.example:80', '10.0.0.5:20241', '127.0.0.1', '127.0.0.1:20241/x', '']) assert.equal(feed.metricsAddress({ HERDR_PORTAL_TUNNEL_METRICS: bad }), '127.0.0.1:20241', bad);
+});
+
+test('render: the header says what the tunnel is doing, and says nothing when there is none to speak of', () => {
+  const head = (tunnel) => feed.render({ entries: [], width: 100, height: 8, scroll: 0, paused: false, health: 'up', tunnel, color: false, timeZone: 'UTC' })[0];
+  assert.equal(head({ state: 'up', connections: 4 }), 'Herdr portal activity  ·  portal up  ·  tunnel up (4 connections)  ·  live');
+  assert.equal(head({ state: 'up', connections: 1 }), 'Herdr portal activity  ·  portal up  ·  tunnel up (1 connection)  ·  live');
+  assert.equal(head({ state: 'down' }), 'Herdr portal activity  ·  portal up  ·  tunnel DOWN (no connections)  ·  live');
+  assert.equal(head({ state: 'gone' }), 'Herdr portal activity  ·  portal up  ·  tunnel not answering  ·  live');
+  assert.equal(head({ state: 'none' }), 'Herdr portal activity  ·  portal up  ·  live');
+  assert.equal(head(undefined), 'Herdr portal activity  ·  portal up  ·  live', 'a caller that passes no tunnel sees the header as before');
+});

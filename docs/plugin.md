@@ -47,7 +47,7 @@ Herdr clones the repository with `git`, shows a trust preview in an interactive 
 
 | Action | Does |
 |---|---|
-| `Tunnel: show activity` (`romiluz13.herdr-tunnel.activity`) | Opens a tab with the portal's recent activity, live. `q` quits, `p` pauses, arrows and Page keys scroll, End returns to live. Green rows were sent, cyan queued, red refused, yellow need a look |
+| `Tunnel: show activity` (`romiluz13.herdr-tunnel.activity`) | Opens a tab with the portal's recent activity, live. Its header says whether the portal answers and, when `cloudflared` is running on this machine, how many connections the tunnel has: `tunnel up (4 connections)`, or `tunnel DOWN (no connections)`. `q` quits, `p` pauses, arrows and Page keys scroll, End returns to live. Green rows were sent, cyan queued, red refused, yellow need a look |
 | `Tunnel: show only agents it touched` (`...agents-touched`) | Sets Herdr's Agents view to the agents that carry a `tunnel_last` tag, newest attention first. It needs no config edit |
 | `Tunnel: show all agents again` (`...agents-all`) | Clears that view |
 
@@ -66,13 +66,14 @@ The activity tab opens as a normal tab, not as a popup, so it does not take over
 ## Safety
 
 - **No way to send input.** The plugin's socket client refuses every method except `agent.view.set`, `agent.view.clear` and `plugin.pane.open`, and a test checks that no plugin source imports `child_process`, calls the Herdr CLI or names an input method.
-- **No secrets.** It never reads the portal's token and never calls the portal's API. It reads `audit.jsonl`, which holds no prompt text, and the activity tab removes control characters from every field before it draws, so a line in that file cannot move your cursor or recolour your screen.
+- **No secrets.** It never reads the portal's token and never calls the portal's API. The header also asks `cloudflared`'s `/ready` on this machine (`HERDR_PORTAL_TUNNEL_METRICS`, default `127.0.0.1:20241`; only `127.0.0.1` or `localhost` is accepted, and for any other value the default is used without a message). It reads `audit.jsonl`, which holds no prompt text, and the activity tab removes control characters from every field before it draws, so a line in that file cannot move your cursor or recolour your screen.
 - **No background process.** Herdr describes plugin startup hooks as one-shot, not as places to keep a daemon, so this plugin has no startup hook. The tag is set by the portal, which is running anyway.
 - **Same trust as before.** Anyone who can write `audit.jsonl` is already your user and can drive Herdr directly.
 
 ## Limits
 
 - The activity tab reads `audit.jsonl` from `HERDR_PORTAL_LOG_DIR`, else `~/Library/Logs/herdr-portal`, in the environment of the Herdr server. If the portal logs elsewhere, start Herdr with the same variable, or the tab says there is no activity. Its header asks `GET /healthz` on `HERDR_PORTAL_PORT` (default 8787) and shows `portal up` or `portal down`.
+- The tunnel part of the header appears only once `cloudflared` has answered `/ready` on the metrics address, so a machine with no tunnel sees none, and another service on that port is ignored. After a connector that had answered stops answering it says `tunnel not answering`.
 - Another Herdr plugin, `loofare/herdr-portal`, also reads `HERDR_PORTAL_PORT`. If you run both and set that variable in Herdr's environment, the header's `portal up` check asks the other project's server; leave it unset or run only one.
 - The `platforms` list says macOS and Linux because the plugin has no macOS-only code; the portal's own log default is the macOS path, and a real Herdr on Linux was not run.
 - Tags are display only. Herdr states that metadata never changes an agent's state, waits or notifications.

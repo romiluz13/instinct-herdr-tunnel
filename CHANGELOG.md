@@ -4,6 +4,15 @@ All notable changes. The format follows [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Added
+
+- **`portalctl diagnose`.** A read-only report for a public address that stops answering: whether the portal answers and how many connections the tunnel has, the last request the portal handled and the last audit entry, and the outages in the last 24 hours (no tunnel connection to Cloudflare), each with its first error, plus the default network and sleep events on macOS. It reads no token and prints no URL or tunnel hostname. `HERDR_PORTAL_TUNNEL_LOG` names the log to read. See [docs/tunnel.md](docs/tunnel.md).
+
+### Changed
+
+- The plugin's activity tab shows the tunnel in its header (`tunnel up (4 connections)`, `tunnel DOWN (no connections)`, `tunnel not answering`), read from `cloudflared`'s `/ready` on this machine.
+- Documentation: a public `302` does not show the tunnel is up.
+
 ## [0.1.0] - 2026-10-24
 
 ### Added

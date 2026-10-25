@@ -20,16 +20,18 @@ if (flag('--once') >= 0 || !process.stdout.isTTY) {
 const out = process.stdout;
 let entries = feed.AuditTail.last(file, 500);
 const tail = new feed.AuditTail(file, { fromEnd: true });
-let scroll = 0; let paused = false; let frozen = 0; let health = 'unknown';
+let scroll = 0; let paused = false; let frozen = 0; let health = 'unknown'; let tunnel = feed.tunnelFrom(null, false);
+const metrics = feed.metricsAddress(env);
 
 const shown = () => (paused ? entries.slice(0, frozen) : entries);
 const draw = () => {
-  const lines = feed.render({ entries: shown(), width: out.columns || 80, height: out.rows || 24, scroll, paused, health, color: !env.NO_COLOR });
+  const lines = feed.render({ entries: shown(), width: out.columns || 80, height: out.rows || 24, scroll, paused, health, tunnel, color: !env.NO_COLOR });
   out.write('\x1b[H' + lines.map((l) => l + '\x1b[K').join('\r\n'));
 };
 
 const probe = async () => {
   try { const r = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1500) }); health = r.ok ? 'up' : 'down'; } catch { health = 'down'; }
+  try { const r = await fetch(`http://${metrics}/ready`, { signal: AbortSignal.timeout(1500) }); tunnel = feed.tunnelFrom({ status: r.status, body: await r.text() }, tunnel.seen); } catch { tunnel = feed.tunnelFrom(null, tunnel.seen); }
   draw();
 };
 

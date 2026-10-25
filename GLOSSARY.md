@@ -88,6 +88,20 @@ _Avoid_: Badge, status
 The small Herdr plugin in `plugin/` that opens an activity tab and narrows the Agents list to the agents the portal touched. It cannot send input to a pane.
 _Avoid_: Extension, add-on
 
+## The public address
+
+**Public address**:
+The address a caller outside the owner's machine uses to reach the portal through the tunnel.
+_Avoid_: Endpoint, URL, hostname
+
+**Tunnel connection**:
+One of the connections the tunnel keeps open to Cloudflare. A request from outside reaches the portal only while at least one is up.
+_Avoid_: Link, channel
+
+**Outage**:
+A stretch in which the tunnel has no connection to Cloudflare. The public address cannot reach the portal, which keeps answering on the owner's machine.
+_Avoid_: Downtime, disconnect
+
 ## What the portal remembers
 
 **Ledger**:

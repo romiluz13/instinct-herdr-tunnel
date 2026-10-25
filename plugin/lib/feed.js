@@ -52,7 +52,31 @@ function row(e, { width, color, timeZone }) {
   return color ? `\x1b[${COLOR[tone(e)]}m${text}\x1b[0m` : text;
 }
 
-function render({ entries, width, height, scroll, paused, health, color, timeZone }) {
+// cloudflared answers /ready with 200 and its connection count while it is connected to Cloudflare, and with 503 and 0 when it is not.
+// The plugin runs unsandboxed as the owner and has no reason to ask anything but this machine, so any other metrics address is ignored.
+const DEFAULT_METRICS = '127.0.0.1:20241';
+const metricsAddress = (env) => (/^(127\.0\.0\.1|localhost):\d{1,5}$/.test(env.HERDR_PORTAL_TUNNEL_METRICS || '') ? env.HERDR_PORTAL_TUNNEL_METRICS : DEFAULT_METRICS);
+
+// Only cloudflared's own answer counts. No answer, or another service's, means there is no tunnel on this machine until one has answered;
+// after that it means the connector is gone.
+function tunnelFrom(answer, seen) {
+  let n = null;
+  if (answer) { try { n = JSON.parse(answer.body).readyConnections; } catch { /* not cloudflared's JSON */ } }
+  if (answer && answer.status === 200 && Number.isInteger(n) && n > 0) return { state: 'up', connections: n, seen: true };
+  if (answer && answer.status === 503 && n === 0) return { state: 'down', connections: 0, seen: true };
+  return { state: seen ? 'gone' : 'none', connections: null, seen };
+}
+
+function tunnelPart(tunnel) {
+  switch (tunnel && tunnel.state) {
+    case 'up': return `tunnel up (${tunnel.connections} connection${tunnel.connections === 1 ? '' : 's'})`;
+    case 'down': return 'tunnel DOWN (no connections)';
+    case 'gone': return 'tunnel not answering';
+    default: return null;
+  }
+}
+
+function render({ entries, width, height, scroll, paused, health, tunnel, color, timeZone }) {
   const bodyHeight = Math.max(1, height - 3);
   const maxScroll = Math.max(0, entries.length - bodyHeight);
   const back = Math.min(Math.max(0, scroll), maxScroll);
@@ -61,7 +85,7 @@ function render({ entries, width, height, scroll, paused, health, color, timeZon
   if (!entries.length) rows.push(fit('no portal activity yet: the portal writes a line here for every write it handles', width));
   while (rows.length < bodyHeight) rows.push('');
   const state = paused ? 'paused' : back ? `scrolled back ${back}` : 'live';
-  const head = fit(`Herdr portal activity  ·  portal ${health === 'up' ? 'up' : health === 'down' ? 'down' : 'unknown'}  ·  ${state}`, width);
+  const head = fit(['Herdr portal activity', `portal ${health === 'up' ? 'up' : health === 'down' ? 'down' : 'unknown'}`, tunnelPart(tunnel), state].filter(Boolean).join('  ·  '), width);
   return [head, '─'.repeat(Math.min(width, 72)), ...rows, fit('q quit · p pause · ↑/↓ PgUp/PgDn scroll · End live', width)];
 }
 
@@ -105,4 +129,4 @@ class AuditTail {
   }
 }
 
-module.exports = { auditPath, parseLine, verb, tone, formatTime, row, render, AuditTail };
+module.exports = { auditPath, parseLine, verb, tone, formatTime, row, render, AuditTail, metricsAddress, tunnelFrom };
