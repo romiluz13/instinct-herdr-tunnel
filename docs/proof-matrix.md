@@ -1,4 +1,4 @@
-# Proof matrix — Herdr portal 0.1.0
+# Proof matrix — Herdr portal 0.1.1
 
 Generated 2026-10-22 by `scripts/gen-proof-matrix.js`. Installed Herdr: **0.9.5** (last proven live: 0.9.5; at run time every write is judged against the installed CLI's own schema, see lib/compat.js). Schema: output of `herdr api schema --json` — **102** request methods (`/schemas/request/oneOf`, protocol 22).
 

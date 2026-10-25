@@ -1,6 +1,6 @@
 {
   "name": "instinct-herdr-tunnel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Loopback HTTP portal and JSON API to observe Herdr sessions and manage their agents through an allowlist",
   "license": "MIT",
   "author": "Rom Iluz",
