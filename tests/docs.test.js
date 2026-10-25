@@ -51,11 +51,37 @@ test('every relative link and #anchor in the Markdown files resolves', () => {
   assert.deepEqual(broken, []);
 });
 
-test('the README states the real number of actions, everywhere it states one', () => {
+test('every repository path a document names exists', () => {
+  const missing = [];
+  for (const file of markdown()) {
+    // A path followed by more path characters or a wildcard (docs/e2e-*.json) is a pattern, not a file.
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(/(?<![\w./-])((?:tests|scripts|bin|lib|docs|plugin|public)\/[\w./-]*\w)(?![\w-]|\.\w|\/|\*)/g)) {
+      if (m[1].startsWith('docs/official/')) continue; // fetched on demand and git-ignored (scripts/fetch-herdr-docs.js)
+      const found = [ROOT, path.dirname(file)].some((base) => fs.existsSync(path.join(base, m[1])));
+      if (!found) missing.push(`${path.relative(ROOT, file)} names ${m[1]}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('every document states the real number of actions, and the README states one', () => {
   const n = Object.keys(ACTIONS).length;
-  const stated = [...read('README.md').matchAll(/\b(\d+) actions\b/g)].map((m) => Number(m[1]));
-  assert.ok(stated.length > 0, 'the README says how many actions there are');
-  assert.deepEqual([...new Set(stated)], [n]);
+  const stated = [];
+  for (const file of markdown()) {
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(/\b(\d+)[ -](?:allowed )?actions?\b/g)) stated.push({ file: path.relative(ROOT, file), n: Number(m[1]) });
+  }
+  assert.ok(stated.some((s) => s.file === 'README.md'), 'the README says how many actions there are');
+  assert.deepEqual(stated.filter((s) => s.n !== n), []);
+});
+
+test('every document states the number of Herdr request methods that the proof matrix recorded', () => {
+  const recorded = Number(/\*\*(\d+)\*\* request methods/.exec(read('docs', 'proof-matrix.md'))[1]);
+  const stated = [];
+  for (const file of markdown()) {
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(/\b(\d+)\*{0,2} request methods\b/g)) stated.push({ file: path.relative(ROOT, file), n: Number(m[1]) });
+  }
+  assert.ok(stated.some((s) => s.file === 'README.md'), 'the README says how many request methods Herdr has');
+  assert.deepEqual(stated.filter((s) => s.n !== recorded), []);
 });
 
 test('no document states a count of tests: a hand-kept number goes stale and cannot be checked without running the suite', () => {
