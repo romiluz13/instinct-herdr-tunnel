@@ -12,6 +12,8 @@ All notable changes. The format follows [Keep a Changelog](https://keepachangelo
 
 - The plugin's activity tab shows the tunnel in its header (`tunnel up (4 connections)`, `tunnel DOWN (no connections)`, `tunnel not answering`), read from `cloudflared`'s `/ready` on this machine.
 - Documentation: a public `302` does not show the tunnel is up.
+- Documentation: the README is rebuilt as a landing page, with a banner drawn in code, a macOS quickstart built on `portalctl install` and a recording of `scripts/e2e-control.js`. The real outputs it used to carry moved to [docs/see-it-work.md](docs/see-it-work.md); the images are in `docs/img/`.
+- Documentation: the glossary's audit log entry now covers history reads and says a call to a switched-off action leaves no line.
 
 ## [0.1.0] - 2026-10-24
 

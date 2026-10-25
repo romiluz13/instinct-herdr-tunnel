@@ -109,7 +109,7 @@ The durable record of every write and its result, kept by idempotency key so tha
 _Avoid_: Log, history
 
 **Audit log**:
-One line per write or file drop, refusals included, written for the owner to read afterwards.
+One line per write, file drop or history read, refusals included (a call to a switched-off action leaves none), written for the owner to read afterwards.
 _Avoid_: Journal, trace
 
 **Needs review**:
