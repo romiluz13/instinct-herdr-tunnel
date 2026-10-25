@@ -76,7 +76,7 @@ The activity tab opens as a normal tab, not as a popup, so it does not take over
 - Another Herdr plugin, `loofare/herdr-portal`, also reads `HERDR_PORTAL_PORT`. If you run both and set that variable in Herdr's environment, the header's `portal up` check asks the other project's server; leave it unset or run only one.
 - The `platforms` list says macOS and Linux because the plugin has no macOS-only code; the portal's own log default is the macOS path, and a real Herdr on Linux was not run.
 - Tags are display only. Herdr states that metadata never changes an agent's state, waits or notifications.
-- A published Herdr marketplace listing needs the repository topic `herdr-plugin`; this repository does not have it yet.
+- A published Herdr marketplace listing needs the repository topic `herdr-plugin`. This repository has it; that a listing appears has not been checked.
 
 ## How it was checked
 
